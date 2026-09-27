@@ -22,8 +22,17 @@ pub fn check(code: c_int, what: &str) -> Result<c_int, FfError> {
     }
 }
 
-pub fn set_log_level(verbose: bool) {
-    unsafe { ff::av_log_set_level(if verbose { ff::AV_LOG_VERBOSE as c_int } else { ff::AV_LOG_ERROR as c_int }) };
+/// FFmpeg's own stderr logging. Quiet by default: probing and fallbacks make
+/// FFmpeg print errors that are expected. `NYA_FFMPEG_LOG=error|warning|verbose`
+/// turns it back on for troubleshooting.
+pub fn init_log_level() {
+    let level = match std::env::var("NYA_FFMPEG_LOG").unwrap_or_default().to_ascii_lowercase().as_str() {
+        "verbose" | "debug" => ff::AV_LOG_VERBOSE as c_int,
+        "warning" | "warn" => ff::AV_LOG_WARNING as c_int,
+        "error" => ff::AV_LOG_ERROR as c_int,
+        _ => ff::AV_LOG_QUIET as c_int,
+    };
+    unsafe { ff::av_log_set_level(level) };
 }
 
 /// Fail early if the FFmpeg DLLs next to the executable don't match the bindings.

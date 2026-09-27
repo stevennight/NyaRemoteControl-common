@@ -10,7 +10,7 @@ pub mod decoder;
 pub mod encoder;
 mod ff;
 
-pub use ff::{check_runtime_versions, set_log_level, FfError};
+pub use ff::{check_runtime_versions, init_log_level, FfError};
 
 /// Runtime (avcodec, avutil) major versions.
 pub fn ffmpeg_versions() -> (u32, u32) {
