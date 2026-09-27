@@ -12,6 +12,8 @@ pub mod stream_type {
     pub const INPUT: u64 = 1;
     pub const VIDEO: u64 = 2;
     pub const CURSOR: u64 = 3;
+    /// File / clipboard-image transfer (FileHeader + bytes), either direction.
+    pub const FILE: u64 = 4;
 }
 
 /// Datagram types (first byte).

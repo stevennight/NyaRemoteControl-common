@@ -11,7 +11,7 @@ nya-proto = { path = "../nya-proto" }
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 quinn.workspace = true
 rustls.workspace = true
 rcgen.workspace = true

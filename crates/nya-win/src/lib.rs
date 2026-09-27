@@ -8,6 +8,7 @@ pub mod desktop;
 pub mod dpi;
 pub mod duplication;
 pub mod input;
+pub mod shell;
 pub mod topology;
 pub mod transfer;
 

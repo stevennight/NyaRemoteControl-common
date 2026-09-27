@@ -65,6 +65,8 @@ enum Feature {
   FEATURE_STATIC_REFINE = 5;
   FEATURE_SAS = 6;
   FEATURE_MULTI_GPU_INFO = 7;
+  FEATURE_FILE_TRANSFER = 8;      // since 1.1
+  FEATURE_CLIPBOARD_IMAGE = 9;    // since 1.1
 }
 
 // ============================================================================
@@ -92,6 +94,9 @@ message ControlMsg {
     StreamError stream_error = 17;
     StopStream stop_stream = 18;
     ServerStats server_stats = 19;
+    FileOffer file_offer = 20;       // since 1.1
+    FileRequest file_request = 21;   // since 1.1
+    FileResult file_result = 22;     // since 1.1
   }
 }
 
@@ -227,6 +232,50 @@ message ServerStats {
 }
 
 message ClipboardText { string text = 1; }
+
+// ---------------------------------------------------------------------------
+// File transfer (feature FILE_TRANSFER / CLIPBOARD_IMAGE)
+//
+// Data goes on uni streams of type 4 (either direction):
+//   varint stream type, length-delimited FileHeader, then exactly `size` bytes.
+// ---------------------------------------------------------------------------
+
+enum FilePurpose {
+  FILE_PURPOSE_UNSPECIFIED = 0;
+  FILE_PURPOSE_SAVE = 1;              // save into the receiver's Downloads/NyaRemoteControl
+  FILE_PURPOSE_CLIPBOARD_IMAGE = 2;   // CF_DIB bytes for the receiver's clipboard
+}
+
+message FileHeader {
+  uint64 transfer_id = 1;   // groups the files of one batch
+  string name = 2;          // file name only
+  uint64 size = 3;
+  FilePurpose purpose = 4;
+  uint32 index = 5;         // 0-based position in the batch
+  uint32 count = 6;         // files in the batch
+}
+
+message FileEntry {
+  string name = 1;
+  uint64 size = 2;
+}
+
+// Host -> client: files were copied on the host; the client may request them.
+message FileOffer {
+  uint64 transfer_id = 1;
+  repeated FileEntry files = 2;
+}
+
+// Client -> host: send the files of this offer.
+message FileRequest { uint64 transfer_id = 1; }
+
+// Receiver -> sender: outcome of a batch (or of one failed file).
+message FileResult {
+  uint64 transfer_id = 1;
+  bool ok = 2;
+  string message = 3;
+  string saved_to = 4;      // folder the files were saved in
+}
 message SendSas {}
 message Bye { string reason = 1; }
 

@@ -7,6 +7,7 @@
 //! * [`endpoint`] – quinn endpoints with tuned transport settings
 
 pub mod endpoint;
+pub mod files;
 pub mod identity;
 pub mod pairing;
 pub mod tls;

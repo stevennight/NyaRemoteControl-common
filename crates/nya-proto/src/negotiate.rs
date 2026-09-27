@@ -43,6 +43,8 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::StaticRefine,
         Feature::Sas,
         Feature::MultiGpuInfo,
+        Feature::FileTransfer,
+        Feature::ClipboardImage,
     ]
     .into_iter()
     .map(|f| f as u32)

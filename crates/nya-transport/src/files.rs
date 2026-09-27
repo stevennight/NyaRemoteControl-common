@@ -1,0 +1,202 @@
+//! File / clipboard-image transfer over QUIC uni streams (stream type FILE):
+//! `varint type | length-delimited FileHeader | size bytes`.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use nya_proto::frame::stream_type;
+use nya_proto::framing::{encode_varint, expect_msg};
+use nya_proto::pb::FileHeader;
+use quinn::{Connection, RecvStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+const CHUNK: usize = 256 * 1024;
+/// Clipboard images larger than this are not transferred.
+pub const MAX_IMAGE_BYTES: u64 = 64 << 20;
+
+/// Remove directories and characters Windows doesn't allow in file names.
+pub fn sanitize_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = base
+        .chars()
+        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c })
+        .collect();
+    let trimmed = cleaned.trim().trim_end_matches('.').to_string();
+    if trimmed.is_empty() || trimmed == ".." {
+        "file".into()
+    } else {
+        trimmed
+    }
+}
+
+/// `dir/name`, or `dir/name (1).ext` … if taken.
+pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let p = dir.join(name);
+    if !p.exists() {
+        return p;
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    (1..)
+        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
+/// Send one file (from disk) on a new uni stream. `progress(bytes)` is called per chunk.
+pub async fn send_file(conn: &Connection, header: FileHeader, path: &Path, mut progress: impl FnMut(u64)) -> Result<()> {
+    let mut file = tokio::fs::File::open(path).await.with_context(|| format!("打开 {}", path.display()))?;
+    let mut s = conn.open_uni().await?;
+    s.set_priority(-1)?; // below video, input and cursor
+    let mut prelude = Vec::new();
+    encode_varint(stream_type::FILE, &mut prelude);
+    prelude.extend(nya_proto::framing::encode_msg(&header));
+    s.write_all(&prelude).await?;
+    let mut buf = vec![0u8; CHUNK];
+    let mut left = header.size;
+    while left > 0 {
+        let n = file.read(&mut buf[..(left.min(CHUNK as u64) as usize)]).await?;
+        if n == 0 {
+            bail!("{} 在发送过程中变小了", path.display());
+        }
+        s.write_all(&buf[..n]).await?;
+        left -= n as u64;
+        progress(n as u64);
+    }
+    s.finish()?;
+    Ok(())
+}
+
+/// Send in-memory bytes (clipboard image).
+pub async fn send_bytes(conn: &Connection, header: FileHeader, data: &[u8]) -> Result<()> {
+    let mut s = conn.open_uni().await?;
+    s.set_priority(-1)?;
+    let mut prelude = Vec::new();
+    encode_varint(stream_type::FILE, &mut prelude);
+    prelude.extend(nya_proto::framing::encode_msg(&header));
+    s.write_all(&prelude).await?;
+    s.write_all(data).await?;
+    s.finish()?;
+    Ok(())
+}
+
+/// Read the header of a FILE stream (the type varint was already consumed).
+pub async fn read_header(r: &mut RecvStream) -> Result<FileHeader> {
+    Ok(expect_msg(r, 64 * 1024).await?)
+}
+
+/// Receive the payload into `dir`, under a unique, sanitized name. Writes to
+/// a `.part` file first so half-received files are never mistaken for complete ones.
+pub async fn receive_to_dir(r: &mut RecvStream, h: &FileHeader, dir: &Path, mut progress: impl FnMut(u64)) -> Result<PathBuf> {
+    tokio::fs::create_dir_all(dir).await.with_context(|| format!("创建 {}", dir.display()))?;
+    let name = sanitize_name(&h.name);
+    let final_path = unique_path(dir, &name);
+    let part = final_path.with_extension(format!(
+        "{}nyapart",
+        final_path.extension().map(|e| format!("{}.", e.to_string_lossy())).unwrap_or_default()
+    ));
+    let mut f = tokio::fs::File::create(&part).await.with_context(|| format!("创建 {}", part.display()))?;
+    let res = async {
+        let mut buf = vec![0u8; CHUNK];
+        let mut left = h.size;
+        while left > 0 {
+            let n = r.read(&mut buf[..(left.min(CHUNK as u64) as usize)]).await?.unwrap_or(0);
+            if n == 0 {
+                bail!("传输中断（{} 还差 {left} 字节）", h.name);
+            }
+            f.write_all(&buf[..n]).await?;
+            left -= n as u64;
+            progress(n as u64);
+        }
+        f.flush().await?;
+        Ok(())
+    }
+    .await;
+    drop(f);
+    match res {
+        Ok(()) => {
+            tokio::fs::rename(&part, &final_path).await?;
+            Ok(final_path)
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            Err(e)
+        }
+    }
+}
+
+/// Receive a small payload into memory.
+pub async fn receive_to_vec(r: &mut RecvStream, h: &FileHeader, limit: u64) -> Result<Vec<u8>> {
+    if h.size > limit {
+        bail!("数据过大（{} 字节）", h.size);
+    }
+    let mut v = vec![0u8; h.size as usize];
+    r.read_exact(&mut v).await?;
+    Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize() {
+        assert_eq!(sanitize_name("a/b/c.txt"), "c.txt");
+        assert_eq!(sanitize_name(r"C:\x\..\evil.exe"), "evil.exe");
+        assert_eq!(sanitize_name("what?.txt"), "what_.txt");
+        assert_eq!(sanitize_name(".."), "file");
+        assert_eq!(sanitize_name("name. "), "name");
+        assert_eq!(sanitize_name(""), "file");
+    }
+
+    #[test]
+    fn unique_names() {
+        let dir = std::env::temp_dir().join(format!("nya-files-{}", nya_proto::now_us()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(unique_path(&dir, "a.txt"), dir.join("a.txt"));
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        assert_eq!(unique_path(&dir, "a.txt"), dir.join("a (1).txt"));
+        std::fs::write(dir.join("a (1).txt"), b"x").unwrap();
+        assert_eq!(unique_path(&dir, "a.txt"), dir.join("a (2).txt"));
+        std::fs::write(dir.join("noext"), b"x").unwrap();
+        assert_eq!(unique_path(&dir, "noext"), dir.join("noext (1)"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn file_roundtrip_over_quic() {
+        use crate::endpoint::{client_endpoint, connect, server_endpoint};
+        use crate::Identity;
+        let sid = Identity::generate().unwrap();
+        let server = server_endpoint("127.0.0.1:0".parse().unwrap(), &sid).unwrap();
+        let addr = server.local_addr().unwrap();
+        let dir = std::env::temp_dir().join(format!("nya-recv-{}", nya_proto::now_us()));
+        let dir2 = dir.clone();
+        let recv = tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let mut r = conn.accept_uni().await.unwrap();
+            let t = nya_proto::framing::read_varint(&mut r).await.unwrap();
+            assert_eq!(t, Some(stream_type::FILE));
+            let h = read_header(&mut r).await.unwrap();
+            let p = receive_to_dir(&mut r, &h, &dir2, |_| {}).await.unwrap();
+            conn.close(0u32.into(), b"");
+            p
+        });
+        let src = std::env::temp_dir().join(format!("nya-src-{}.bin", nya_proto::now_us()));
+        let data: Vec<u8> = (0..1_000_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let ep = client_endpoint(addr).unwrap();
+        let conn = connect(&ep, addr, &Identity::generate().unwrap(), None).await.unwrap();
+        let h = FileHeader { transfer_id: 1, name: "../x/data.bin".into(), size: data.len() as u64, purpose: 1, index: 0, count: 1 };
+        let mut sent = 0;
+        send_file(&conn, h, &src, |n| sent += n).await.unwrap();
+        assert_eq!(sent, data.len() as u64);
+        let p = recv.await.unwrap();
+        assert_eq!(p, dir.join("data.bin"));
+        assert_eq!(std::fs::read(&p).unwrap(), data);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&src);
+    }
+}

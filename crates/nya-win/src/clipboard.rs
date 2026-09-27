@@ -75,3 +75,102 @@ pub fn set_text(text: &str) -> Result<()> {
     }
     Ok(())
 }
+
+const CF_DIB: u32 = 8;
+const CF_HDROP: u32 = 15;
+
+pub fn has_files() -> bool {
+    unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(CF_HDROP).is_ok() }
+}
+
+pub fn has_image() -> bool {
+    unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(CF_DIB).is_ok() }
+}
+
+pub fn has_text() -> bool {
+    unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok() }
+}
+
+/// Paths of files copied in Explorer (CF_HDROP).
+pub fn get_files() -> Result<Option<Vec<std::path::PathBuf>>> {
+    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+    let _open = Open::new()?;
+    let h = match unsafe { GetClipboardData(CF_HDROP) } {
+        Ok(h) if !h.is_invalid() => h,
+        _ => return Ok(None),
+    };
+    let drop = HDROP(h.0);
+    let count = unsafe { DragQueryFileW(drop, u32::MAX, None) };
+    let mut out = Vec::new();
+    for i in 0..count {
+        let len = unsafe { DragQueryFileW(drop, i, None) } as usize;
+        let mut buf = vec![0u16; len + 1];
+        let n = unsafe { DragQueryFileW(drop, i, Some(&mut buf)) } as usize;
+        out.push(std::path::PathBuf::from(String::from_utf16_lossy(&buf[..n])));
+    }
+    Ok(Some(out))
+}
+
+/// Put files on the clipboard so Explorer can paste them.
+pub fn set_files(paths: &[std::path::PathBuf]) -> Result<()> {
+    use windows::Win32::UI::Shell::DROPFILES;
+    let mut list: Vec<u16> = Vec::new();
+    for p in paths {
+        list.extend(p.as_os_str().to_string_lossy().encode_utf16());
+        list.push(0);
+    }
+    list.push(0);
+    let header = std::mem::size_of::<DROPFILES>();
+    let _open = Open::new()?;
+    unsafe {
+        EmptyClipboard()?;
+        let g = GlobalAlloc(GMEM_MOVEABLE, header + list.len() * 2)?;
+        let p = GlobalLock(g) as *mut u8;
+        if p.is_null() {
+            bail!("GlobalLock failed");
+        }
+        let df = DROPFILES { pFiles: header as u32, fWide: true.into(), ..Default::default() };
+        std::ptr::copy_nonoverlapping(&df as *const DROPFILES as *const u8, p, header);
+        std::ptr::copy_nonoverlapping(list.as_ptr() as *const u8, p.add(header), list.len() * 2);
+        let _ = GlobalUnlock(g);
+        SetClipboardData(CF_HDROP, HANDLE(g.0))?;
+    }
+    Ok(())
+}
+
+/// Clipboard image as CF_DIB bytes (BITMAPINFOHEADER + pixels).
+pub fn get_dib() -> Result<Option<Vec<u8>>> {
+    use windows::Win32::System::Memory::GlobalSize;
+    let _open = Open::new()?;
+    let h = match unsafe { GetClipboardData(CF_DIB) } {
+        Ok(h) if !h.is_invalid() => h,
+        _ => return Ok(None),
+    };
+    let g = HGLOBAL(h.0);
+    unsafe {
+        let size = GlobalSize(g);
+        let p = GlobalLock(g) as *const u8;
+        if p.is_null() || size == 0 {
+            return Ok(None);
+        }
+        let v = std::slice::from_raw_parts(p, size).to_vec();
+        let _ = GlobalUnlock(g);
+        Ok(Some(v))
+    }
+}
+
+pub fn set_dib(dib: &[u8]) -> Result<()> {
+    let _open = Open::new()?;
+    unsafe {
+        EmptyClipboard()?;
+        let g = GlobalAlloc(GMEM_MOVEABLE, dib.len())?;
+        let p = GlobalLock(g) as *mut u8;
+        if p.is_null() {
+            bail!("GlobalLock failed");
+        }
+        std::ptr::copy_nonoverlapping(dib.as_ptr(), p, dib.len());
+        let _ = GlobalUnlock(g);
+        SetClipboardData(CF_DIB, HANDLE(g.0))?;
+    }
+    Ok(())
+}
