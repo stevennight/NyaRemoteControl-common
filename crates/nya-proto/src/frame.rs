@@ -18,7 +18,10 @@ pub mod stream_type {
 
 /// Datagram types (first byte).
 pub mod datagram_type {
+    /// Host system audio -> client.
     pub const AUDIO: u8 = 1;
+    /// Client microphone -> host (same layout as AUDIO).
+    pub const MIC: u8 = 2;
 }
 
 pub mod frame_flags {
@@ -132,8 +135,13 @@ impl AudioPacket {
     pub const HEADER_LEN: usize = 13;
 
     pub fn encode(&self) -> Vec<u8> {
+        self.encode_as(datagram_type::AUDIO)
+    }
+
+    /// Encode with another datagram type that shares this layout (MIC).
+    pub fn encode_as(&self, ty: u8) -> Vec<u8> {
         let mut v = Vec::with_capacity(Self::HEADER_LEN + self.data.len());
-        v.push(datagram_type::AUDIO);
+        v.push(ty);
         v.extend_from_slice(&self.seq.to_le_bytes());
         v.extend_from_slice(&self.capture_ts_us.to_le_bytes());
         v.extend_from_slice(&self.data);
@@ -142,7 +150,15 @@ impl AudioPacket {
 
     /// Parse a datagram whose type byte is AUDIO.
     pub fn decode(buf: &[u8]) -> Option<Self> {
-        if buf.len() < Self::HEADER_LEN || buf[0] != datagram_type::AUDIO {
+        if buf.first() != Some(&datagram_type::AUDIO) {
+            return None;
+        }
+        Self::decode_any(buf)
+    }
+
+    /// Decode regardless of the type byte (caller checked it).
+    pub fn decode_any(buf: &[u8]) -> Option<Self> {
+        if buf.len() < Self::HEADER_LEN {
             return None;
         }
         Some(Self {

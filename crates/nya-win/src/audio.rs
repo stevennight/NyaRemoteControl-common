@@ -1,5 +1,5 @@
-//! WASAPI shared-mode loopback capture (host) and playback (client), both as
-//! 48 kHz stereo f32 with the audio engine doing any format conversion.
+//! WASAPI shared-mode capture (system loopback, microphone) and playback,
+//! all as 48 kHz stereo f32 with the audio engine doing format conversion.
 
 use anyhow::{Context, Result};
 use windows::Win32::Media::Audio::*;
@@ -29,8 +29,46 @@ fn default_device(flow: EDataFlow) -> Result<IMMDevice> {
     Ok(unsafe { enumerator.GetDefaultAudioEndpoint(flow, eConsole).context("default audio endpoint")? })
 }
 
+fn enumerator() -> Result<IMMDeviceEnumerator> {
+    Ok(unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("MMDeviceEnumerator")? })
+}
+
+fn friendly_name(d: &IMMDevice) -> Option<String> {
+    use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+    use windows::Win32::System::Com::STGM_READ;
+    unsafe {
+        let store = d.OpenPropertyStore(STGM_READ).ok()?;
+        let v = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+        Some(v.to_string())
+    }
+}
+
+/// Names of the active playback devices.
+pub fn render_device_names() -> Vec<String> {
+    let Ok(e) = enumerator() else { return Vec::new() };
+    let Ok(list) = (unsafe { e.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) }) else { return Vec::new() };
+    let n = unsafe { list.GetCount() }.unwrap_or(0);
+    (0..n).filter_map(|i| unsafe { list.Item(i) }.ok()).filter_map(|d| friendly_name(&d)).collect()
+}
+
+/// First active playback device whose name contains `part` (case-insensitive).
+pub fn find_render_device(part: &str) -> Option<(IMMDevice, String)> {
+    let e = enumerator().ok()?;
+    let list = unsafe { e.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) }.ok()?;
+    let n = unsafe { list.GetCount() }.ok()?;
+    let part = part.to_lowercase();
+    (0..n).filter_map(|i| unsafe { list.Item(i) }.ok()).find_map(|d| {
+        let name = friendly_name(&d)?;
+        name.to_lowercase().contains(&part).then_some((d, name))
+    })
+}
+
 fn open_client(flow: EDataFlow, extra_flags: u32, buffer_hns: i64) -> Result<IAudioClient> {
     let device = default_device(flow)?;
+    open_device(&device, extra_flags, buffer_hns)
+}
+
+fn open_device(device: &IMMDevice, extra_flags: u32, buffer_hns: i64) -> Result<IAudioClient> {
     let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
     let fmt = float_format();
     let flags = extra_flags | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
@@ -56,6 +94,14 @@ impl LoopbackCapture {
     /// Caller must have initialised COM on this thread ([`crate::com_init`]).
     pub fn new() -> Result<Self> {
         let client = open_client(eRender, AUDCLNT_STREAMFLAGS_LOOPBACK, 2_000_000)?;
+        let capture: IAudioCaptureClient = unsafe { client.GetService()? };
+        unsafe { client.Start()? };
+        Ok(Self { client, capture })
+    }
+
+    /// The default recording device (microphone) instead of the loopback.
+    pub fn microphone() -> Result<Self> {
+        let client = open_client(eCapture, 0, 400_000)?;
         let capture: IAudioCaptureClient = unsafe { client.GetService()? };
         unsafe { client.Start()? };
         Ok(Self { client, capture })
@@ -104,7 +150,15 @@ unsafe impl Send for AudioRenderer {}
 
 impl AudioRenderer {
     pub fn new() -> Result<Self> {
-        let client = open_client(eRender, 0, 1_000_000)?;
+        Self::with_client(open_client(eRender, 0, 1_000_000)?)
+    }
+
+    /// Play on a specific device (e.g. the VB-Cable input for the microphone).
+    pub fn on_device(device: &IMMDevice) -> Result<Self> {
+        Self::with_client(open_device(device, 0, 1_000_000)?)
+    }
+
+    fn with_client(client: IAudioClient) -> Result<Self> {
         let render: IAudioRenderClient = unsafe { client.GetService()? };
         let buffer_frames = unsafe { client.GetBufferSize()? };
         unsafe { client.Start()? };
