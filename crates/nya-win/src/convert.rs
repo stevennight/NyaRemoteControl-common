@@ -162,6 +162,8 @@ impl Converter {
             ctx.OMSetBlendState(None, None, 0xffff_ffff);
             ctx.PSSetShaderResources(0, Some(&[Some(src.clone())]));
             ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+            // The vertex shader reads src_rect: without this every pixel samples (0,0).
+            ctx.VSSetConstantBuffers(0, Some(&[Some(self.cbuf.clone())]));
             ctx.PSSetConstantBuffers(0, Some(&[Some(self.cbuf.clone())]));
         }
         match target {
