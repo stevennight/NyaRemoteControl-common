@@ -91,7 +91,8 @@ impl CrossGpuCopy {
         unsafe {
             self.dst.context.CopySubresourceRegion(dst_tex, dst_slice, 0, 0, 0, &self.dst_stage, 0, None);
         }
-        Ok(())
+        // The encoder reads dst_tex next; make sure the copy really happened.
+        self.dst.flush_wait()
     }
 }
 

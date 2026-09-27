@@ -91,6 +91,40 @@ impl D3dDevice {
         self.device.clone().into_raw()
     }
 
+    /// Submit queued commands and wait (up to 100 ms) until the GPU finished
+    /// them. Needed before another engine (NVENC / QSV) reads what we rendered:
+    /// D3D11 batches commands, so without this the encoder can see a stale,
+    /// empty surface.
+    pub fn flush_wait(&self) -> Result<()> {
+        let desc = D3D11_QUERY_DESC { Query: D3D11_QUERY_EVENT, MiscFlags: 0 };
+        let mut q = None;
+        unsafe { self.device.CreateQuery(&desc, Some(&mut q))? };
+        let q = q.ok_or_else(|| anyhow!("CreateQuery returned null"))?;
+        unsafe {
+            self.context.End(&q);
+            self.context.Flush();
+        }
+        let start = std::time::Instant::now();
+        loop {
+            let mut done = windows::Win32::Foundation::BOOL(0);
+            let r = unsafe {
+                self.context.GetData(
+                    &q,
+                    Some(&mut done as *mut _ as *mut std::ffi::c_void),
+                    std::mem::size_of::<windows::Win32::Foundation::BOOL>() as u32,
+                    0,
+                )
+            };
+            if r.is_ok() && done.as_bool() {
+                return Ok(());
+            }
+            if start.elapsed() > std::time::Duration::from_millis(100) {
+                return Ok(());
+            }
+            std::thread::yield_now();
+        }
+    }
+
     pub fn texture(&self, desc: &D3D11_TEXTURE2D_DESC) -> Result<ID3D11Texture2D> {
         let mut t = None;
         unsafe { self.device.CreateTexture2D(desc, None, Some(&mut t))? };
