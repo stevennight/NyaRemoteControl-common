@@ -34,10 +34,25 @@ pub struct Injector {
     buttons: HashSet<Button>,
 }
 
+static SEND_FAILURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// SendInput calls that injected fewer events than requested (blocked by UIPI,
+/// wrong desktop, …) since start.
+pub fn send_failures() -> u64 {
+    SEND_FAILURES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn send(inputs: &[INPUT]) {
     let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
     if sent as usize != inputs.len() {
-        tracing::debug!("SendInput injected {sent}/{} events", inputs.len());
+        let n = SEND_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n < 3 {
+            tracing::warn!(
+                "SendInput injected {sent}/{} events: {}",
+                inputs.len(),
+                windows::core::Error::from_win32()
+            );
+        }
     }
 }
 
