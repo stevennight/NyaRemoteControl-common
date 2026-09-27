@@ -16,6 +16,10 @@ use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 
 use crate::identity::{Fingerprint, Identity};
 
+/// Text of the error raised when the server certificate doesn't match the
+/// pinned fingerprint (clients match on it to offer re-verification).
+pub const PIN_MISMATCH: &str = "被控端证书指纹与已保存的不一致";
+
 pub fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }
@@ -84,9 +88,7 @@ impl ServerCertVerifier for PinnedServerCert {
     ) -> Result<ServerCertVerified, rustls::Error> {
         match self.pinned {
             Some(pin) if Fingerprint::of_der(end_entity.as_ref()) != pin => {
-                Err(rustls::Error::General(
-                    "被控端证书指纹与已保存的不一致（可能被控端重装过，或存在中间人）".into(),
-                ))
+                Err(rustls::Error::General(format!("{PIN_MISMATCH}（可能被控端重装过，或存在中间人）")))
             }
             _ => Ok(ServerCertVerified::assertion()),
         }
