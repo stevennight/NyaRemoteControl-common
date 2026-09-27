@@ -6,6 +6,7 @@ members = [
     "crates/nya-ffmpeg-sys",
     "crates/nya-media",
     "crates/nya-win",
+    "crates/nya-ui",
     "tools/gen-ffmpeg-bindings",
 ]
 # The bindings generator needs libclang at runtime; keep it out of plain `cargo build`.
@@ -15,6 +16,7 @@ default-members = [
     "crates/nya-ffmpeg-sys",
     "crates/nya-media",
     "crates/nya-win",
+    "crates/nya-ui",
 ]
 
 [workspace.package]
@@ -40,3 +42,6 @@ sha2 = "0.10"
 rand = "0.8"
 windows = "0.58"
 crossbeam-channel = "0.5"
+egui = "0.31"
+egui-winit = "0.31"
+winit = "0.30"
