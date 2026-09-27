@@ -68,6 +68,7 @@ enum Feature {
   FEATURE_FILE_TRANSFER = 8;      // since 1.1
   FEATURE_CLIPBOARD_IMAGE = 9;    // since 1.1
   FEATURE_MICROPHONE = 10;        // since 1.1: client mic -> host virtual cable
+  FEATURE_USB_REDIRECT = 11;      // since 1.1: USB/IP through a tunnel
 }
 
 // ============================================================================
@@ -98,7 +99,34 @@ message ControlMsg {
     FileOffer file_offer = 20;       // since 1.1
     FileRequest file_request = 21;   // since 1.1
     FileResult file_result = 22;     // since 1.1
+    UsbAttach usb_attach = 23;       // since 1.1
+    UsbDetach usb_detach = 24;       // since 1.1
+    UsbStatus usb_status = 25;       // since 1.1
   }
+}
+
+// ---------------------------------------------------------------------------
+// USB passthrough (feature USB_REDIRECT)
+//
+// The client shares a device with usbipd-win (USB/IP server, TCP 3240 on the
+// client). The host attaches it with usbip-win2 to a local tunnel endpoint;
+// each TCP connection is carried on a bidi stream the host opens:
+//   varint stream type TUNNEL, varint target port, then raw bytes both ways.
+// ---------------------------------------------------------------------------
+
+// Client -> host: attach this device (already bound with usbipd on the client).
+message UsbAttach {
+  string busid = 1;
+  string description = 2;
+}
+
+message UsbDetach { string busid = 1; }
+
+// Host -> client: result / state change of a device.
+message UsbStatus {
+  string busid = 1;
+  bool attached = 2;
+  string message = 3;
 }
 
 // --- pairing (only when Welcome.needs_pairing) ---
@@ -169,6 +197,8 @@ message SessionInfo {
   // Name of the host playback device that receives the client microphone
   // (e.g. "CABLE Input"); empty = no virtual cable installed. Since 1.1.
   string mic_device = 4;
+  // usbip-win2 is installed on the host (USB passthrough possible). Since 1.1.
+  bool usb_available = 5;
 }
 
 message ClientCaps {

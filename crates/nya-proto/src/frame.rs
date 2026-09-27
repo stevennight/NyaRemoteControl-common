@@ -14,6 +14,8 @@ pub mod stream_type {
     pub const CURSOR: u64 = 3;
     /// File / clipboard-image transfer (FileHeader + bytes), either direction.
     pub const FILE: u64 = 4;
+    /// Bidi TCP tunnel opened by the host (USB/IP): varint port, then raw bytes.
+    pub const TUNNEL: u64 = 5;
 }
 
 /// Datagram types (first byte).
