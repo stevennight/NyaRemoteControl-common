@@ -69,6 +69,10 @@ pub struct Duplicator {
     pub rotation: i32,
     holding: bool,
     shape_buf: Vec<u8>,
+    /// No image delivered yet. The first acquired resource always holds the
+    /// full desktop, but a static screen (e.g. the logon screen) may report
+    /// `LastPresentTime == 0` for it, and nothing else would ever arrive.
+    first: bool,
 }
 
 impl Duplicator {
@@ -92,6 +96,7 @@ impl Duplicator {
             rotation: desc.Rotation.0,
             holding: false,
             shape_buf: Vec::new(),
+            first: true,
         })
     }
 
@@ -107,11 +112,14 @@ impl Duplicator {
         }
         self.holding = true;
 
-        let image = if info.LastPresentTime != 0 {
+        let image = if info.LastPresentTime != 0 || self.first {
             res.and_then(|r| r.cast::<ID3D11Texture2D>().ok())
         } else {
             None
         };
+        if image.is_some() {
+            self.first = false;
+        }
         let mut pointer = PointerUpdate::default();
         if info.LastMouseUpdateTime != 0 {
             let p = info.PointerPosition;
