@@ -81,6 +81,73 @@ fn open_device(device: &IMMDevice, extra_flags: u32, buffer_hns: i64) -> Result<
     Ok(client)
 }
 
+/// Is the default playback device's name containing `part` (case-insensitive)?
+pub fn default_render_is(part: &str) -> bool {
+    default_device(eRender)
+        .ok()
+        .and_then(|d| friendly_name(&d))
+        .is_some_and(|n| n.to_lowercase().contains(&part.to_lowercase()))
+}
+
+#[windows::core::implement(IActivateAudioInterfaceCompletionHandler)]
+struct ActivateDone(std::sync::mpsc::SyncSender<()>);
+
+impl IActivateAudioInterfaceCompletionHandler_Impl for ActivateDone_Impl {
+    fn ActivateCompleted(&self, _op: Option<&IActivateAudioInterfaceAsyncOperation>) -> windows::core::Result<()> {
+        let _ = self.0.try_send(());
+        Ok(())
+    }
+}
+
+fn process_loopback_client(pid: u32) -> Result<IAudioClient> {
+    use std::time::Duration;
+    use windows::core::{Interface, PROPVARIANT};
+
+    // PROPVARIANT holding a VT_BLOB that points at the activation parameters.
+    #[repr(C)]
+    struct BlobVariant {
+        vt: u16,
+        reserved: [u16; 3],
+        size: u32,
+        data: *const AUDIOCLIENT_ACTIVATION_PARAMS,
+    }
+    const _: () = assert!(std::mem::size_of::<BlobVariant>() == std::mem::size_of::<PROPVARIANT>());
+    const VT_BLOB: u16 = 65;
+
+    let params = AUDIOCLIENT_ACTIVATION_PARAMS {
+        ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+        Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+            ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                TargetProcessId: pid,
+                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+            },
+        },
+    };
+    let var = BlobVariant {
+        vt: VT_BLOB,
+        reserved: [0; 3],
+        size: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+        data: &params,
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let handler: IActivateAudioInterfaceCompletionHandler = ActivateDone(tx).into();
+    let op = unsafe {
+        ActivateAudioInterfaceAsync(
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+            &IAudioClient::IID,
+            Some(&var as *const BlobVariant as *const PROPVARIANT),
+            &handler,
+        )
+        .context("ActivateAudioInterfaceAsync")?
+    };
+    rx.recv_timeout(Duration::from_secs(5)).context("process loopback activation timed out")?;
+    let mut hr = windows::core::HRESULT(0);
+    let mut iface = None;
+    unsafe { op.GetActivateResult(&mut hr, &mut iface)? };
+    hr.ok().context("process loopback activation")?;
+    iface.context("no audio client")?.cast::<IAudioClient>().context("IAudioClient")
+}
+
 /// Captures whatever the default playback device is playing.
 pub struct LoopbackCapture {
     client: IAudioClient,
@@ -94,6 +161,33 @@ impl LoopbackCapture {
     /// Caller must have initialised COM on this thread ([`crate::com_init`]).
     pub fn new() -> Result<Self> {
         let client = open_client(eRender, AUDCLNT_STREAMFLAGS_LOOPBACK, 2_000_000)?;
+        let capture: IAudioCaptureClient = unsafe { client.GetService()? };
+        unsafe { client.Start()? };
+        Ok(Self { client, capture })
+    }
+
+    /// Everything the system plays except audio rendered by process `pid` and
+    /// its children (process loopback, Windows 10 2004+ / build 20348+). Used
+    /// so the host never records the microphone it plays into VB-Cable,
+    /// whichever device is the default.
+    pub fn excluding_process(pid: u32) -> Result<Self> {
+        let client = process_loopback_client(pid)?;
+        let fmt = float_format();
+        unsafe {
+            client
+                .Initialize(
+                    AUDCLNT_SHAREMODE_SHARED,
+                    AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+                    2_000_000,
+                    0,
+                    &fmt,
+                    None,
+                )
+                .context("IAudioClient::Initialize (process loopback)")?;
+            // Event mode is required here; the event is never waited on, `read` polls.
+            let event = windows::Win32::System::Threading::CreateEventW(None, false, false, None)?;
+            client.SetEventHandle(event)?;
+        }
         let capture: IAudioCaptureClient = unsafe { client.GetService()? };
         unsafe { client.Start()? };
         Ok(Self { client, capture })

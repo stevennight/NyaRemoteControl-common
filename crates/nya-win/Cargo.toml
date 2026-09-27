@@ -11,10 +11,12 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 sha2.workspace = true
+windows-core = "0.58"
 
 [dependencies.windows]
 workspace = true
 features = [
+    "implement",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
