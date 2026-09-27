@@ -10,6 +10,7 @@ publish.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+sha2.workspace = true
 
 [dependencies.windows]
 workspace = true
@@ -40,4 +41,7 @@ features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_Devices_FunctionDiscovery",
     "Win32_Devices_Properties",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Networking_WinInet",
+    "Win32_System_Registry",
 ]
