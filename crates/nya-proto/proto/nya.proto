@@ -182,6 +182,16 @@ message StreamConfig {
   uint32 fps = 5;
   uint32 bitrate_kbps = 6;
   StreamMode mode = 7;
+  BitratePolicy bitrate_policy = 8;   // since 1.1
+}
+
+// How the host adapts the bitrate to the network.
+enum BitratePolicy {
+  BITRATE_POLICY_UNSPECIFIED = 0;   // automatic: office -> QUALITY, game -> BALANCED
+  BITRATE_POLICY_QUALITY = 1;       // only on sustained heavy backlog; floor 60 %
+  BITRATE_POLICY_BALANCED = 2;      // backlog or queueing delay; floor 35 %
+  BITRATE_POLICY_SMOOTH = 3;        // backlog, delay or loss; floor 15 %
+  BITRATE_POLICY_FIXED = 4;         // never adapt
 }
 
 // Client request. Zero / UNSPECIFIED fields mean "server decides".
@@ -229,6 +239,7 @@ message ServerStats {
   uint32 fps = 4;
   uint32 bitrate_kbps = 5;       // measured
   uint32 target_kbps = 6;        // current encoder target (adaptive bitrate); since 1.1
+  string bitrate_note = 7;       // policy and reason of the last change; since 1.1
 }
 
 message ClipboardText { string text = 1; }

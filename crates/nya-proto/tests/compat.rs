@@ -40,6 +40,7 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
                 fps: 60,
                 bitrate_kbps: 20000,
                 mode: pb::StreamMode::Office as i32,
+                ..Default::default()
             }),
             encoder_preference: "auto".into(),
         })),
