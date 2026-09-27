@@ -6,7 +6,7 @@
 //!
 //! | backend  | 4:2:0 input | 4:4:4 input                                  |
 //! |----------|-------------|----------------------------------------------|
-//! | NVENC    | NV12        | BGRA + `rgb_mode=yuv444` (NVENC converts)     |
+//! | NVENC    | NV12 (BGRA if the driver can't render to NV12) | BGRA + `rgb_mode=yuv444` (NVENC converts) |
 //! | QSV      | NV12        | VUYX / AYUV (HEVC only)                       |
 //! | AMF      | NV12        | —                                            |
 //! | software | CPU YUV420P | —                                            |
@@ -193,13 +193,29 @@ impl VideoEncoder {
                     bail!("hardware encoder needs a D3D11 device");
                 }
                 device = d3d11_device_ctx(d3d_device)?;
-                let (sw, inp) = if cfg.yuv444 {
-                    (ff::AV_PIX_FMT_BGRA, InputFormat::Bgra)
+                if cfg.yuv444 {
+                    input = InputFormat::Bgra;
+                    frames = pool_frames(&device, ff::AV_PIX_FMT_D3D11, ff::AV_PIX_FMT_BGRA, w, h, 6)?;
                 } else {
-                    (ff::AV_PIX_FMT_NV12, InputFormat::Nv12)
-                };
-                input = inp;
-                frames = pool_frames(&device, ff::AV_PIX_FMT_D3D11, sw, w, h, 6)?;
+                    // Many drivers reject NV12 texture *arrays* bound as render targets
+                    // (E_INVALIDARG). Fall back to individually allocated textures, and
+                    // for NVENC finally to BGRA input converted by NVENC itself.
+                    let d3d = ff::AV_PIX_FMT_D3D11;
+                    match pool_frames(&device, d3d, ff::AV_PIX_FMT_NV12, w, h, 6)
+                        .or_else(|_| pool_frames(&device, d3d, ff::AV_PIX_FMT_NV12, w, h, 0))
+                    {
+                        Ok(f) => {
+                            input = InputFormat::Nv12;
+                            frames = f;
+                        }
+                        Err(e) if cfg.backend == Backend::Nvenc => {
+                            tracing::info!("NV12 encoder surfaces unavailable ({e:#}); using BGRA input");
+                            input = InputFormat::Bgra;
+                            frames = pool_frames(&device, d3d, ff::AV_PIX_FMT_BGRA, w, h, 6)?;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
             Backend::Qsv => {
                 if d3d_device.is_null() {
