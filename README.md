@@ -43,3 +43,13 @@ cargo test                          # 所有测试只用 CPU，不需要显卡
 ## 服务端 / 客户端如何引用本仓库
 
 目前通过同级目录的 `path` 依赖引用。以后有了远程仓库，可以改成 `git = "...", tag = "vX.Y.Z"`，本地开发时再用 `[patch]` 覆盖回本地路径。
+
+## 仓库布局
+
+本项目由三个仓库组成，需要克隆到同一个父目录下（server / client 通过 `../common` 引用公共库）：
+
+```powershell
+gh repo clone stevennight/NyaRemoteControl-common common
+gh repo clone stevennight/NyaRemoteControl-server server
+gh repo clone stevennight/NyaRemoteControl-client client
+```
