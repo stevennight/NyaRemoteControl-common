@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nya-proto",
+    "crates/nya-transport",
+    "crates/nya-ffmpeg-sys",
+    "crates/nya-media",
+    "crates/nya-win",
+    "tools/gen-ffmpeg-bindings",
+]
+# The bindings generator needs libclang at runtime; keep it out of plain `cargo build`.
+default-members = [
+    "crates/nya-proto",
+    "crates/nya-transport",
+    "crates/nya-ffmpeg-sys",
+    "crates/nya-media",
+    "crates/nya-win",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+prost = "0.13"
+prost-build = "0.13"
+protox = "0.7"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = "0.13"
+socket2 = "0.5"
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+windows = "0.58"
+crossbeam-channel = "0.5"

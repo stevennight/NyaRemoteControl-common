@@ -1,0 +1,291 @@
+// NyaRemoteControl wire protocol.
+//
+// Compatibility rules (see docs/design/phase1-architecture.md §6.4):
+//  * never change a field's number or type; removed fields go to `reserved`
+//  * a missing field's default value must mean "old behaviour"
+//  * new behaviour is gated by Feature negotiation, not by version comparisons
+//  * Hello / HelloReply / Welcome / Reject existing fields are frozen forever
+syntax = "proto3";
+package nya.v1;
+
+// ============================================================================
+// Handshake (control stream, first exchange)
+// ============================================================================
+
+// First message the client writes on the control stream.
+message Hello {
+  uint32 proto_major = 1;
+  uint32 proto_minor = 2;
+  // Oldest MAJOR this client can still speak. 0 means "same as proto_major".
+  uint32 min_proto_major = 3;
+  string client_name = 4;
+  string client_version = 5;
+  // Feature numbers (see enum Feature). uint32 so unknown values survive decoding.
+  repeated uint32 features = 6;
+}
+
+message HelloReply {
+  oneof reply {
+    Welcome welcome = 1;
+    Reject reject = 2;
+  }
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_CLIENT_TOO_OLD = 1;   // client must be upgraded
+  REJECT_REASON_SERVER_TOO_OLD = 2;   // server must be upgraded
+  REJECT_REASON_AUTH_FAILED = 3;
+  REJECT_REASON_BUSY = 4;
+  REJECT_REASON_NOT_PAIRED = 5;
+}
+
+message Reject {
+  RejectReason reason = 1;
+  string message = 2;   // human readable, can be shown as-is
+  uint32 server_proto_major = 3;
+  uint32 server_min_proto_major = 4;
+}
+
+message Welcome {
+  uint32 proto_major = 1;          // MAJOR used for this session
+  uint32 proto_minor = 2;
+  string server_name = 3;
+  string server_version = 4;
+  repeated uint32 features = 5;    // intersection = features enabled for this session
+  bool needs_pairing = 6;          // true: an AuthChallenge follows
+}
+
+enum Feature {
+  FEATURE_UNSPECIFIED = 0;
+  FEATURE_AUDIO = 1;
+  FEATURE_LOCAL_CURSOR = 2;
+  FEATURE_CLIPBOARD_TEXT = 3;
+  FEATURE_YUV444 = 4;
+  FEATURE_STATIC_REFINE = 5;
+  FEATURE_SAS = 6;
+  FEATURE_MULTI_GPU_INFO = 7;
+}
+
+// ============================================================================
+// Control messages (control stream, after the handshake)
+// ============================================================================
+
+message ControlMsg {
+  oneof msg {
+    AuthChallenge auth_challenge = 1;
+    AuthResponse auth_response = 2;
+    AuthResult auth_result = 3;
+    SessionInfo session_info = 4;
+    ClientCaps client_caps = 5;
+    StartStream start_stream = 6;
+    StreamStarted stream_started = 7;
+    SetMode set_mode = 8;
+    RequestKeyframe request_keyframe = 9;
+    DisplayChanged display_changed = 10;
+    Ping ping = 11;
+    Pong pong = 12;
+    ClientStats client_stats = 13;
+    ClipboardText clipboard_text = 14;
+    SendSas send_sas = 15;
+    Bye bye = 16;
+    StreamError stream_error = 17;
+    StopStream stop_stream = 18;
+    ServerStats server_stats = 19;
+  }
+}
+
+// --- pairing (only when Welcome.needs_pairing) ---
+message AuthChallenge { bytes server_nonce = 1; }
+message AuthResponse {
+  bytes client_nonce = 1;
+  bytes mac = 2;          // HMAC-SHA256(pairing key, client transcript)
+}
+message AuthResult {
+  bool ok = 1;
+  bytes server_mac = 2;   // HMAC-SHA256(pairing key, server transcript); lets the client trust the server cert
+  string message = 3;
+}
+
+// --- session ---
+enum Codec {
+  CODEC_UNSPECIFIED = 0;
+  CODEC_H264 = 1;
+  CODEC_HEVC = 2;
+  CODEC_AV1 = 3;
+}
+
+enum Chroma {
+  CHROMA_UNSPECIFIED = 0;
+  CHROMA_YUV420 = 1;
+  CHROMA_YUV444 = 2;
+}
+
+enum StreamMode {
+  STREAM_MODE_UNSPECIFIED = 0;   // treated as OFFICE
+  STREAM_MODE_OFFICE = 1;
+  STREAM_MODE_GAME = 2;
+}
+
+message CodecCap {
+  Codec codec = 1;
+  Chroma chroma = 2;
+  uint32 max_width = 3;
+  uint32 max_height = 4;
+  bool hardware = 5;
+}
+
+message GpuInfo {
+  uint32 index = 1;
+  string name = 2;
+  uint32 vendor_id = 3;
+  uint64 luid = 4;
+  repeated CodecCap encoders = 5;
+  string encoder_backend = 6;   // "nvenc" / "qsv" / "amf" / ""
+}
+
+message DisplayInfo {
+  uint32 id = 1;
+  string name = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  int32 x = 5;
+  int32 y = 6;
+  uint32 refresh_hz = 7;
+  bool primary = 8;
+  uint32 gpu_index = 9;         // GPU the display is attached to (capture GPU)
+}
+
+message SessionInfo {
+  string host_name = 1;
+  repeated DisplayInfo displays = 2;
+  repeated GpuInfo gpus = 3;
+}
+
+message ClientCaps {
+  repeated CodecCap decoders = 1;
+  uint32 max_width = 2;
+  uint32 max_height = 3;
+  uint32 max_fps = 4;
+}
+
+message StreamConfig {
+  Codec codec = 1;
+  Chroma chroma = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 fps = 5;
+  uint32 bitrate_kbps = 6;
+  StreamMode mode = 7;
+}
+
+// Client request. Zero / UNSPECIFIED fields mean "server decides".
+message StartStream {
+  uint32 display_id = 1;
+  StreamConfig config = 2;
+  string encoder_preference = 3;   // "", "auto", "nvenc", "qsv", "software"
+}
+
+message StreamStarted {
+  uint32 display_id = 1;
+  StreamConfig config = 2;         // what the server actually uses
+  uint64 stream_id = 3;            // matches the video stream prelude
+  string encoder_name = 4;         // e.g. "hevc_nvenc"
+  uint32 capture_gpu_index = 5;
+  uint32 encode_gpu_index = 6;
+  bool cross_gpu = 7;
+  uint32 source_width = 8;         // display size in pixels (cursor coordinates use this)
+  uint32 source_height = 9;
+}
+
+message StreamError { string message = 1; }
+message StopStream {}
+message SetMode { StreamMode mode = 1; }
+message RequestKeyframe {}
+message DisplayChanged { repeated DisplayInfo displays = 1; }
+
+message Ping { uint64 t_us = 1; }
+message Pong {
+  uint64 t_us = 1;          // echo of Ping.t_us
+  uint64 server_t_us = 2;   // server clock when replying
+}
+
+message ClientStats {
+  float decode_ms_p50 = 1;
+  float render_ms_p50 = 2;
+  uint32 frames_dropped = 3;
+  uint32 fps = 4;
+}
+
+message ServerStats {
+  float capture_ms_p50 = 1;
+  float encode_ms_p50 = 2;
+  float transfer_ms_p50 = 3;   // cross-GPU copy
+  uint32 fps = 4;
+  uint32 bitrate_kbps = 5;
+}
+
+message ClipboardText { string text = 1; }
+message SendSas {}
+message Bye { string reason = 1; }
+
+// ============================================================================
+// Input stream (client -> server, uni stream type 1)
+// ============================================================================
+
+enum MouseButton {
+  MOUSE_BUTTON_UNSPECIFIED = 0;
+  MOUSE_BUTTON_LEFT = 1;
+  MOUSE_BUTTON_RIGHT = 2;
+  MOUSE_BUTTON_MIDDLE = 3;
+  MOUSE_BUTTON_X1 = 4;
+  MOUSE_BUTTON_X2 = 5;
+}
+
+message InputMsg {
+  oneof ev {
+    MouseAbs mouse_abs = 1;
+    MouseRel mouse_rel = 2;
+    MouseButtonEv mouse_button = 3;
+    Wheel wheel = 4;
+    Key key = 5;
+    ReleaseAll release_all = 6;
+  }
+}
+
+// Coordinates normalised to 0..65535 across the streamed display.
+message MouseAbs { uint32 x = 1; uint32 y = 2; }
+message MouseRel { int32 dx = 1; int32 dy = 2; }
+message MouseButtonEv { MouseButton button = 1; bool down = 2; }
+// Units of 1/120 of a notch (WHEEL_DELTA).
+message Wheel { int32 dx = 1; int32 dy = 2; }
+// PC/AT set-1 scancode; `extended` = E0 prefix.
+message Key { uint32 scancode = 1; bool extended = 2; bool down = 3; }
+message ReleaseAll {}
+
+// ============================================================================
+// Cursor stream (server -> client, uni stream type 3)
+// ============================================================================
+
+message CursorMsg {
+  oneof msg {
+    CursorShape shape = 1;
+    CursorState state = 2;
+  }
+}
+
+message CursorShape {
+  uint32 id = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  int32 hot_x = 4;
+  int32 hot_y = 5;
+  bytes rgba = 6;   // straight alpha, row-major, width*height*4
+}
+
+message CursorState {
+  uint32 shape_id = 1;
+  bool visible = 2;
+  int32 x = 3;      // hotspot position in source display pixels
+  int32 y = 4;
+}

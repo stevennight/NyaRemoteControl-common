@@ -1,0 +1,13 @@
+[package]
+name = "nya-media"
+description = "FFmpeg-based video encoders (NVENC/QSV/AMF/software), decoders (D3D11VA/software) and Opus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nya-ffmpeg-sys = { path = "../nya-ffmpeg-sys" }
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

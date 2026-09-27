@@ -1,0 +1,8 @@
+[package]
+name = "nya-ffmpeg-sys"
+description = "Raw FFmpeg 8.1 bindings (pre-generated) and linking; DLLs are copied next to the built executables"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "avcodec"

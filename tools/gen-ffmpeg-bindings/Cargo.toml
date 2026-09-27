@@ -1,0 +1,11 @@
+[package]
+name = "gen-ffmpeg-bindings"
+description = "Regenerates crates/nya-ffmpeg-sys/src/bindings.rs (needs LIBCLANG_PATH); see scripts/gen-ffmpeg-bindings.ps1"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bindgen = "0.70"
+anyhow.workspace = true

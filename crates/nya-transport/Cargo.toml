@@ -1,0 +1,24 @@
+[package]
+name = "nya-transport"
+description = "QUIC transport, TLS identities and pairing for NyaRemoteControl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nya-proto = { path = "../nya-proto" }
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
+socket2.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
