@@ -47,6 +47,7 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::ClipboardImage,
         Feature::Microphone,
         Feature::UsbRedirect,
+        Feature::Gamepad,
     ]
     .into_iter()
     .map(|f| f as u32)

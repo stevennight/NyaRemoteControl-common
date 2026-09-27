@@ -69,6 +69,7 @@ enum Feature {
   FEATURE_CLIPBOARD_IMAGE = 9;    // since 1.1
   FEATURE_MICROPHONE = 10;        // since 1.1: client mic -> host virtual cable
   FEATURE_USB_REDIRECT = 11;      // since 1.1: USB/IP through a tunnel
+  FEATURE_GAMEPAD = 12;           // since 1.1: XInput pads -> virtual Xbox 360 pads
 }
 
 // ============================================================================
@@ -102,7 +103,15 @@ message ControlMsg {
     UsbAttach usb_attach = 23;       // since 1.1
     UsbDetach usb_detach = 24;       // since 1.1
     UsbStatus usb_status = 25;       // since 1.1
+    GamepadRumble gamepad_rumble = 26;  // since 1.1
   }
+}
+
+// Host -> client: force feedback for pad `index` (0..255 per motor).
+message GamepadRumble {
+  uint32 index = 1;
+  uint32 large_motor = 2;
+  uint32 small_motor = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +208,8 @@ message SessionInfo {
   string mic_device = 4;
   // usbip-win2 is installed on the host (USB passthrough possible). Since 1.1.
   bool usb_available = 5;
+  // ViGEmBus is installed on the host (gamepads possible). Since 1.1.
+  bool gamepad_available = 6;
 }
 
 message ClientCaps {
@@ -345,7 +356,21 @@ message InputMsg {
     Wheel wheel = 4;
     Key key = 5;
     ReleaseAll release_all = 6;
+    Gamepad gamepad = 7;             // since 1.1
   }
+}
+
+// XInput state of one controller (XINPUT_GAMEPAD layout).
+message Gamepad {
+  uint32 index = 1;          // 0..3
+  bool connected = 2;        // false = unplugged
+  uint32 buttons = 3;        // XINPUT_GAMEPAD_* bits
+  uint32 left_trigger = 4;   // 0..255
+  uint32 right_trigger = 5;
+  sint32 lx = 6;             // -32768..32767
+  sint32 ly = 7;
+  sint32 rx = 8;
+  sint32 ry = 9;
 }
 
 // Coordinates normalised to 0..65535 across the streamed display.
