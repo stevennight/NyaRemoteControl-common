@@ -351,6 +351,25 @@ impl VideoEncoder {
         &self.cfg
     }
 
+    /// Change the target bitrate while encoding. NVENC and QSV reconfigure on the
+    /// next frame without a keyframe; returns false for encoders that can't.
+    pub fn set_bitrate(&mut self, kbps: u32) -> bool {
+        if !matches!(self.cfg.backend, Backend::Nvenc | Backend::Qsv) {
+            return false;
+        }
+        let fps = self.cfg.fps.max(1) as i64;
+        let bitrate = kbps.max(100) as i64 * 1000;
+        let frames_in_vbv = if self.cfg.game_mode { 1 } else { 4 };
+        unsafe {
+            let c = self.ctx;
+            (*c).bit_rate = bitrate;
+            (*c).rc_max_rate = if self.cfg.game_mode { bitrate } else { bitrate * 3 / 2 };
+            (*c).rc_buffer_size = ((bitrate / fps) * frames_in_vbv).min(i32::MAX as i64) as c_int;
+        }
+        self.cfg.bitrate_kbps = kbps;
+        true
+    }
+
     pub fn input_format(&self) -> InputFormat {
         self.input
     }
