@@ -77,6 +77,19 @@ pub struct Duplicator {
 
 impl Duplicator {
     pub fn new(dev: &D3dDevice, output: &IDXGIOutput) -> Result<Self, DupError> {
+        Self::create(dev, output, false)
+    }
+
+    /// Only the legacy `DuplicateOutput` (no `DuplicateOutput1`).
+    pub fn new_legacy(dev: &D3dDevice, output: &IDXGIOutput) -> Result<Self, DupError> {
+        Self::create(dev, output, true)
+    }
+
+    fn create(dev: &D3dDevice, output: &IDXGIOutput, legacy: bool) -> Result<Self, DupError> {
+        if legacy {
+            let dup = unsafe { output.cast::<IDXGIOutput1>()?.DuplicateOutput(&dev.device).map_err(classify)? };
+            return Ok(Self::wrap(dup));
+        }
         let dup = unsafe {
             // DuplicateOutput1 lets us ask for 8-bit BGRA even on HDR / 10-bit desktops.
             let formats: [DXGI_FORMAT; 1] = [DXGI_FORMAT_B8G8R8A8_UNORM];
@@ -88,8 +101,12 @@ impl Duplicator {
                 Err(_) => output.cast::<IDXGIOutput1>()?.DuplicateOutput(&dev.device).map_err(classify)?,
             }
         };
+        Ok(Self::wrap(dup))
+    }
+
+    fn wrap(dup: IDXGIOutputDuplication) -> Self {
         let desc: DXGI_OUTDUPL_DESC = unsafe { dup.GetDesc() };
-        Ok(Self {
+        Self {
             dup,
             width: desc.ModeDesc.Width,
             height: desc.ModeDesc.Height,
@@ -97,7 +114,7 @@ impl Duplicator {
             holding: false,
             shape_buf: Vec::new(),
             first: true,
-        })
+        }
     }
 
     /// Wait up to `timeout_ms` for a new frame or pointer update.
