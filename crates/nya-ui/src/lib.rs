@@ -109,13 +109,49 @@ pub fn install_fonts(ctx: &egui::Context) {
     tracing::warn!("no CJK font found under {windir}\\Fonts; Chinese text may not render");
 }
 
+/// Dark theme matching the web pages (common/web/src/lib/theme.css).
 pub fn apply_theme(ctx: &egui::Context) {
-    ctx.set_visuals(egui::Visuals::dark());
+    use egui::{Color32, CornerRadius, Shadow, Stroke};
+    let rgb = Color32::from_rgb;
+    let accent = rgb(0xff, 0x78, 0x96);
+    let line = rgb(0x2d, 0x30, 0x38);
+    let mut v = egui::Visuals::dark();
+    v.window_fill = rgb(0x1e, 0x20, 0x26);
+    v.panel_fill = v.window_fill;
+    v.faint_bg_color = rgb(0x25, 0x27, 0x2e);
+    v.extreme_bg_color = rgb(0x16, 0x17, 0x1b);
+    v.window_stroke = Stroke::new(1.0_f32, line);
+    v.window_corner_radius = CornerRadius::same(12);
+    v.menu_corner_radius = CornerRadius::same(10);
+    v.window_shadow = Shadow { offset: [0, 8], blur: 32, spread: 0, color: Color32::from_black_alpha(110) };
+    v.popup_shadow = Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(100) };
+    v.hyperlink_color = accent;
+    v.selection.bg_fill = rgb(0x7a, 0x33, 0x48);
+    v.selection.stroke = Stroke::new(1.0_f32, rgb(0xff, 0xb3, 0xc4));
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, line);
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, rgb(0xa3, 0xa9, 0xb4));
+    for (w, fill) in [
+        (&mut v.widgets.inactive, rgb(0x2a, 0x2c, 0x33)),
+        (&mut v.widgets.hovered, rgb(0x36, 0x39, 0x42)),
+        (&mut v.widgets.active, rgb(0x40, 0x43, 0x4d)),
+        (&mut v.widgets.open, rgb(0x36, 0x39, 0x42)),
+    ] {
+        w.corner_radius = CornerRadius::same(8);
+        w.bg_fill = fill;
+        w.weak_bg_fill = fill;
+        w.bg_stroke = Stroke::NONE;
+    }
+    v.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, rgb(0xd7, 0xda, 0xe0));
+    v.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
+    v.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
+    ctx.set_visuals(v);
     ctx.style_mut(|s| {
         s.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        s.spacing.button_padding = egui::vec2(12.0, 6.0);
-        s.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
-        s.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
-        s.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(22.0));
+        s.spacing.button_padding = egui::vec2(10.0, 5.0);
+        s.spacing.menu_margin = egui::Margin::same(6);
+        s.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(14.5));
+        s.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(14.5));
+        s.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
+        s.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(20.0));
     });
 }
