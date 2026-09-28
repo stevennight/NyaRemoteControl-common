@@ -1,0 +1,15 @@
+[package]
+name = "nya-webui"
+description = "WebView2 pages inside winit windows: embedded assets, JSON calls and events between the page and Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+winit.workspace = true
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
