@@ -77,6 +77,55 @@ pub fn instance_ids(hwid: &str) -> Vec<String> {
     ids
 }
 
+/// State of one device node.
+#[derive(Debug, Clone)]
+pub struct DevState {
+    pub instance_id: String,
+    pub started: bool,
+    /// `CM_PROB_*` (0 = none; 14 = restart needed; 22 = disabled; 10 / 43 = failed to start).
+    pub problem: u32,
+}
+
+/// State of every device with this hardware id.
+pub fn states(hwid: &str) -> Vec<DevState> {
+    let mut v = Vec::new();
+    let _ = for_each(hwid, |set, dev| {
+        let mut buf = [0u16; 512];
+        let mut need = 0u32;
+        let id = if unsafe { SetupDiGetDeviceInstanceIdW(set.0, dev, Some(&mut buf), Some(&mut need)) }.is_ok() {
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            String::from_utf16_lossy(&buf[..end])
+        } else {
+            String::new()
+        };
+        let (mut status, mut problem) = (CM_DEVNODE_STATUS_FLAGS(0), CM_PROB(0));
+        let ok = unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, dev.DevInst, 0) } == CR_SUCCESS;
+        v.push(DevState {
+            instance_id: id,
+            started: ok && status.0 & DN_STARTED.0 != 0,
+            problem: if ok { problem.0 } else { u32::MAX },
+        });
+        Ok(())
+    });
+    v
+}
+
+/// Human-readable meaning of a `CM_PROB_*` code.
+pub fn problem_text(p: u32) -> &'static str {
+    match p {
+        0 => "正常",
+        1 | 18 | 28 => "驱动未正确安装",
+        10 => "设备无法启动（代码 10）",
+        14 => "需要重启电脑才能使用（代码 14）",
+        22 => "已停用（代码 22）",
+        31 => "驱动加载失败（代码 31）",
+        43 => "驱动报告故障（代码 43）",
+        52 => "驱动签名无法验证（代码 52）",
+        u32::MAX => "无法读取状态",
+        _ => "异常",
+    }
+}
+
 /// Is any device with this hardware id started (present and not disabled)?
 pub fn is_started(hwid: &str) -> bool {
     let mut started = false;
