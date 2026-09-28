@@ -4,7 +4,7 @@
 
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT};
 use windows::Win32::Graphics::Dxgi::{
     IDXGIOutput, IDXGIOutput1, IDXGIOutput5, IDXGIOutputDuplication, IDXGIResource,
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
@@ -91,10 +91,16 @@ impl Duplicator {
             return Ok(Self::wrap(dup));
         }
         let dup = unsafe {
-            // DuplicateOutput1 lets us ask for 8-bit BGRA even on HDR / 10-bit desktops.
-            let formats: [DXGI_FORMAT; 1] = [DXGI_FORMAT_B8G8R8A8_UNORM];
+            // On an HDR desktop ask for the FP16 scRGB image and tone-map it
+            // ourselves: the 8-bit image DXGI produces there is washed out /
+            // overexposed. Otherwise 8-bit BGRA (also for 10-bit SDR desktops).
+            let formats: &[DXGI_FORMAT] = if crate::topology::is_hdr(output) {
+                &[DXGI_FORMAT_R16G16B16A16_FLOAT]
+            } else {
+                &[DXGI_FORMAT_B8G8R8A8_UNORM]
+            };
             match output.cast::<IDXGIOutput5>() {
-                Ok(o5) => match o5.DuplicateOutput1(&dev.device, 0, &formats) {
+                Ok(o5) => match o5.DuplicateOutput1(&dev.device, 0, formats) {
                     Ok(d) => d,
                     Err(_) => output.cast::<IDXGIOutput1>()?.DuplicateOutput(&dev.device).map_err(classify)?,
                 },

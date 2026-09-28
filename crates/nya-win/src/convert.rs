@@ -43,6 +43,8 @@ pub struct Converter {
     ps_copy: ID3D11PixelShader,
     sampler: ID3D11SamplerState,
     cbuf: ID3D11Buffer,
+    /// SDR white level (nits) when the source is an HDR (scRGB) desktop.
+    hdr: Option<f32>,
     rtvs: HashMap<(usize, u32, u32), ID3D11RenderTargetView>,
 }
 
@@ -69,14 +71,14 @@ impl Converter {
         };
         let mut sampler = None;
         unsafe { d.CreateSamplerState(&sd, Some(&mut sampler))? };
-        let rect: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+        let params = Self::params(None);
         let bd = D3D11_BUFFER_DESC {
-            ByteWidth: 16,
+            ByteWidth: std::mem::size_of_val(&params) as u32,
             Usage: D3D11_USAGE_DEFAULT,
             BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
             ..Default::default()
         };
-        let init = D3D11_SUBRESOURCE_DATA { pSysMem: rect.as_ptr() as *const _, ..Default::default() };
+        let init = D3D11_SUBRESOURCE_DATA { pSysMem: params.as_ptr() as *const _, ..Default::default() };
         let mut cbuf = None;
         unsafe { d.CreateBuffer(&bd, Some(&init), Some(&mut cbuf))? };
         Ok(Self {
@@ -88,8 +90,29 @@ impl Converter {
             ps_copy: ps("ps_copy")?,
             sampler: sampler.unwrap(),
             cbuf: cbuf.unwrap(),
+            hdr: None,
             rtvs: HashMap::new(),
         })
+    }
+
+    fn params(hdr: Option<f32>) -> [f32; 8] {
+        let (on, scale) = match hdr {
+            // scRGB 1.0 = 80 nits; SDR white sits at `nits`.
+            Some(nits) => (1.0, 80.0 / nits.max(1.0)),
+            None => (0.0, 1.0),
+        };
+        [0.0, 0.0, 1.0, 1.0, on, scale, 0.0, 0.0]
+    }
+
+    /// Source is an HDR desktop (FP16 scRGB) whose SDR white is `sdr_white_nits`
+    /// bright: tone-map to SDR. `None` = ordinary 8-bit sRGB source.
+    pub fn set_hdr(&mut self, sdr_white_nits: Option<f32>) {
+        if self.hdr == sdr_white_nits {
+            return;
+        }
+        self.hdr = sdr_white_nits;
+        let p = Self::params(sdr_white_nits);
+        unsafe { self.dev.context.UpdateSubresource(&self.cbuf, 0, None, p.as_ptr() as *const _, 0, 0) };
     }
 
     fn rtv(&mut self, tex: &ID3D11Texture2D, slice: u32, view_fmt: DXGI_FORMAT) -> Result<ID3D11RenderTargetView> {

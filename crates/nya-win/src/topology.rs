@@ -68,6 +68,8 @@ pub struct OutputInfo {
     pub rotation: i32,
     /// `HMONITOR` of this output (to match windows to GPUs).
     pub hmonitor: isize,
+    /// HDR (advanced colour) is on for this display.
+    pub hdr: bool,
     pub output: IDXGIOutput,
 }
 
@@ -99,6 +101,16 @@ fn display_id(device_name: &str) -> u32 {
             // Fall back to a hash so ids stay stable for odd names.
             device_name.bytes().fold(1000u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32))
         })
+}
+
+/// Is the desktop on this output in HDR (PQ / BT.2020) mode?
+pub fn is_hdr(output: &IDXGIOutput) -> bool {
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Dxgi::{Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, IDXGIOutput6};
+    output
+        .cast::<IDXGIOutput6>()
+        .and_then(|o| unsafe { o.GetDesc1() })
+        .is_ok_and(|d| d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
 }
 
 impl Topology {
@@ -149,6 +161,7 @@ impl Topology {
                     }
                 };
                 let r = od.DesktopCoordinates;
+                let hdr = is_hdr(&output);
                 outputs.push(OutputInfo {
                     id: display_id(&device_name),
                     adapter_index: i,
@@ -161,6 +174,7 @@ impl Topology {
                     refresh_hz: refresh_hz.max(1),
                     rotation: od.Rotation.0,
                     hmonitor: od.Monitor.0 as isize,
+                    hdr,
                     output,
                 });
             }

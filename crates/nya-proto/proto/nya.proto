@@ -70,6 +70,7 @@ enum Feature {
   FEATURE_MICROPHONE = 10;        // since 1.1: client mic -> host virtual cable
   FEATURE_USB_REDIRECT = 11;      // since 1.1: USB/IP through a tunnel
   FEATURE_GAMEPAD = 12;           // since 1.1: XInput pads -> virtual Xbox 360 pads
+  FEATURE_VIRTUAL_DISPLAY = 13;   // since 1.2: StartStream.virtual_display
 }
 
 // ============================================================================
@@ -197,6 +198,8 @@ message DisplayInfo {
   uint32 refresh_hz = 7;
   bool primary = 8;
   uint32 gpu_index = 9;         // GPU the display is attached to (capture GPU)
+  bool is_virtual = 10;         // the session's virtual display; since 1.2
+  bool hdr = 11;                // HDR desktop (streamed tone-mapped to SDR); since 1.2
 }
 
 message SessionInfo {
@@ -210,6 +213,8 @@ message SessionInfo {
   bool usb_available = 5;
   // ViGEmBus is installed on the host (gamepads possible). Since 1.1.
   bool gamepad_available = 6;
+  // The virtual display driver is installed on the host. Since 1.2.
+  bool virtual_display_available = 7;
 }
 
 message ClientCaps {
@@ -241,9 +246,27 @@ enum BitratePolicy {
 
 // Client request. Zero / UNSPECIFIED fields mean "server decides".
 message StartStream {
-  uint32 display_id = 1;
+  uint32 display_id = 1;           // 0 = primary (the virtual display, when one is requested)
   StreamConfig config = 2;
   string encoder_preference = 3;   // "", "auto", "nvenc", "qsv", "software"
+  VirtualDisplay virtual_display = 4;   // since 1.2 (feature VIRTUAL_DISPLAY)
+}
+
+enum DisplayMode {
+  DISPLAY_MODE_PHYSICAL = 0;   // stream the host's displays as they are
+  DISPLAY_MODE_VIRTUAL = 1;    // add a virtual display (made primary); physical displays stay on
+  DISPLAY_MODE_PRIVATE = 2;    // virtual display only: physical displays off, local input blocked
+}
+
+// Display setup the host keeps while the client is attached. Sent again (in a
+// new StartStream) to change the resolution, e.g. when the client window is
+// resized. The host restores its displays after the client leaves.
+message VirtualDisplay {
+  DisplayMode mode = 1;
+  uint32 width = 2;            // 0 = 1920x1080
+  uint32 height = 3;
+  uint32 refresh_hz = 4;       // 0 = 60
+  uint32 scale_percent = 5;    // Windows display scaling; 0 = leave as is
 }
 
 message StreamStarted {
@@ -256,6 +279,7 @@ message StreamStarted {
   bool cross_gpu = 7;
   uint32 source_width = 8;         // display size in pixels (cursor coordinates use this)
   uint32 source_height = 9;
+  bool hdr_tonemapped = 10;        // HDR desktop converted to SDR; since 1.2
 }
 
 message StreamError { string message = 1; }

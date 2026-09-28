@@ -5,7 +5,8 @@
 use anyhow::{anyhow, Context, Result};
 use windows::core::{GUID, HSTRING, PCWSTR};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    SetupDiCallClassInstaller, SetupDiCreateDeviceInfoList, SetupDiCreateDeviceInfoW, SetupDiDestroyDeviceInfoList,
+    CM_Get_DevNode_Status, SetupDiCallClassInstaller, SetupDiCreateDeviceInfoList, SetupDiGetDeviceInstanceIdW,
+    CM_DEVNODE_STATUS_FLAGS, CM_PROB, CR_SUCCESS, DN_STARTED, SetupDiCreateDeviceInfoW, SetupDiDestroyDeviceInfoList,
     SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW, SetupDiSetClassInstallParamsW,
     SetupDiSetDeviceRegistryPropertyW, UpdateDriverForPlugAndPlayDevicesW, DICD_GENERATE_ID, DICS_DISABLE,
     DICS_ENABLE, DICS_FLAG_GLOBAL, DIF_PROPERTYCHANGE, DIF_REGISTERDEVICE, DIGCF_ALLCLASSES, HDEVINFO,
@@ -59,6 +60,36 @@ fn for_each(hwid: &str, mut f: impl FnMut(&DevInfo, &SP_DEVINFO_DATA) -> Result<
         }
     }
     Ok(n)
+}
+
+/// Device instance ids (e.g. `ROOT\DISPLAY\0000`) of devices with this hardware id.
+pub fn instance_ids(hwid: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let _ = for_each(hwid, |set, dev| {
+        let mut buf = [0u16; 512];
+        let mut need = 0u32;
+        if unsafe { SetupDiGetDeviceInstanceIdW(set.0, dev, Some(&mut buf), Some(&mut need)) }.is_ok() {
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            ids.push(String::from_utf16_lossy(&buf[..end]));
+        }
+        Ok(())
+    });
+    ids
+}
+
+/// Is any device with this hardware id started (present and not disabled)?
+pub fn is_started(hwid: &str) -> bool {
+    let mut started = false;
+    let _ = for_each(hwid, |_, dev| {
+        let (mut status, mut problem) = (CM_DEVNODE_STATUS_FLAGS(0), CM_PROB(0));
+        if unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, dev.DevInst, 0) } == CR_SUCCESS
+            && status.0 & DN_STARTED.0 != 0
+        {
+            started = true;
+        }
+        Ok(())
+    });
+    started
 }
 
 /// Does a device node with this hardware id exist?

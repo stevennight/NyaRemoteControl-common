@@ -43,6 +43,7 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
                 ..Default::default()
             }),
             encoder_preference: "auto".into(),
+            ..Default::default()
         })),
     };
     let key = pb::InputMsg {
