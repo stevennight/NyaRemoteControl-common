@@ -70,7 +70,7 @@ enum Feature {
   FEATURE_MICROPHONE = 10;        // since 1.1: client mic -> host virtual cable
   FEATURE_USB_REDIRECT = 11;      // since 1.1: USB/IP through a tunnel
   FEATURE_GAMEPAD = 12;           // since 1.1: XInput pads -> virtual Xbox 360 pads
-  FEATURE_VIRTUAL_DISPLAY = 13;   // since 1.2: StartStream.virtual_display
+  FEATURE_VIRTUAL_DISPLAY = 13;   // since 1.2: StartStream.display_setup
 }
 
 // ============================================================================
@@ -246,27 +246,27 @@ enum BitratePolicy {
 
 // Client request. Zero / UNSPECIFIED fields mean "server decides".
 message StartStream {
-  uint32 display_id = 1;           // 0 = primary (the virtual display, when one is requested)
+  uint32 display_id = 1;           // 0 = primary (the first virtual screen, when there are any)
   StreamConfig config = 2;
   string encoder_preference = 3;   // "", "auto", "nvenc", "qsv", "software"
-  VirtualDisplay virtual_display = 4;   // since 1.2 (feature VIRTUAL_DISPLAY)
+  DisplaySetup display_setup = 4;   // since 1.2 (feature VIRTUAL_DISPLAY)
 }
 
-enum DisplayMode {
-  DISPLAY_MODE_PHYSICAL = 0;   // stream the host's displays as they are
-  DISPLAY_MODE_VIRTUAL = 1;    // add a virtual display (made primary); physical displays stay on
-  DISPLAY_MODE_PRIVATE = 2;    // virtual display only: physical displays off, local input blocked
+// How the host's displays should look while the client is attached. Sent
+// again (in a new StartStream) to change it, e.g. when the client window is
+// resized. The host restores its own layout after the client leaves.
+// Absent / no virtual screens and nothing else set = displays as they are.
+message DisplaySetup {
+  repeated VirtualScreen virtual_screens = 1;   // at most 4; the first one becomes primary
+  bool physical_off = 2;         // switch the physical displays off (needs a virtual screen)
+  bool block_local_input = 3;    // block the host's own keyboard and mouse
 }
 
-// Display setup the host keeps while the client is attached. Sent again (in a
-// new StartStream) to change the resolution, e.g. when the client window is
-// resized. The host restores its displays after the client leaves.
-message VirtualDisplay {
-  DisplayMode mode = 1;
-  uint32 width = 2;            // 0 = 1920x1080
-  uint32 height = 3;
-  uint32 refresh_hz = 4;       // 0 = 60
-  uint32 scale_percent = 5;    // Windows display scaling; 0 = leave as is
+message VirtualScreen {
+  uint32 width = 1;              // 0 = 1920x1080
+  uint32 height = 2;
+  uint32 refresh_hz = 3;         // 0 = 60
+  uint32 scale_percent = 4;      // Windows display scaling; 0 = leave as is
 }
 
 message StreamStarted {

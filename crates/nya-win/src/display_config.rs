@@ -14,11 +14,11 @@ use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_DEVICE_INFO_TYPE, DISPLAYCONFIG_MODE_INFO,
     DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SDR_WHITE_LEVEL,
     DISPLAYCONFIG_SOURCE_DEVICE_NAME, QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS, QUERY_DISPLAY_CONFIG_FLAGS,
-    SDC_ALLOW_CHANGES, SDC_APPLY, SDC_USE_DATABASE_CURRENT, SDC_USE_SUPPLIED_DISPLAY_CONFIG,
+    SDC_ALLOW_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE, SDC_USE_DATABASE_CURRENT, SDC_USE_SUPPLIED_DISPLAY_CONFIG,
 };
 use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, LUID};
 use windows::Win32::Graphics::Gdi::{
-    ChangeDisplaySettingsExW, EnumDisplaySettingsW, CDS_UPDATEREGISTRY, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
+    ChangeDisplaySettingsExW, EnumDisplaySettingsW, CDS_TYPE, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
     DM_DISPLAYFREQUENCY, DM_PELSHEIGHT, DM_PELSWIDTH, ENUM_DISPLAY_SETTINGS_MODE,
 };
 
@@ -84,7 +84,9 @@ impl Config {
 
 /// Apply exactly these paths (every other path becomes inactive). Mode
 /// entries not referenced by `paths` are dropped and indices renumbered.
-pub fn apply(paths: &[DISPLAYCONFIG_PATH_INFO], modes: &[DISPLAYCONFIG_MODE_INFO]) -> Result<()> {
+/// `save` stores the layout for the current set of monitors, so Windows does
+/// not fall back to an older one on the next display change.
+pub fn apply(paths: &[DISPLAYCONFIG_PATH_INFO], modes: &[DISPLAYCONFIG_MODE_INFO], save: bool) -> Result<()> {
     let mut out_modes: Vec<DISPLAYCONFIG_MODE_INFO> = Vec::new();
     let mut remap = |idx: u32| -> u32 {
         match modes.get(idx as usize) {
@@ -102,7 +104,10 @@ pub fn apply(paths: &[DISPLAYCONFIG_PATH_INFO], modes: &[DISPLAYCONFIG_MODE_INFO
             p.targetInfo.Anonymous.modeInfoIdx = remap(p.targetInfo.Anonymous.modeInfoIdx);
         }
     }
-    let flags = SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;
+    let mut flags = SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;
+    if save {
+        flags |= SDC_SAVE_TO_DATABASE;
+    }
     let r = unsafe {
         SetDisplayConfig(Some(&out_paths), (!out_modes.is_empty()).then_some(out_modes.as_slice()), flags)
     };
@@ -214,6 +219,9 @@ pub fn modes(gdi_name: &str) -> Vec<(u32, u32, u32)> {
 }
 
 /// Change the resolution (and refresh rate, when `hz` > 0) of a display.
+/// Only this display's mode changes (nothing is written to the registry:
+/// `CDS_UPDATEREGISTRY` would re-apply the stored settings of every display
+/// and switch detached ones back on). Persist it with [`apply`] + `save`.
 pub fn set_mode(gdi_name: &str, width: u32, height: u32, hz: u32) -> Result<()> {
     let name: Vec<u16> = gdi_name.encode_utf16().chain([0]).collect();
     let try_set = |hz: u32| {
@@ -225,7 +233,7 @@ pub fn set_mode(gdi_name: &str, width: u32, height: u32, hz: u32) -> Result<()> 
             dm.dmDisplayFrequency = hz;
             dm.dmFields |= DM_DISPLAYFREQUENCY;
         }
-        unsafe { ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&dm), HWND::default(), CDS_UPDATEREGISTRY, None) }
+        unsafe { ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&dm), HWND::default(), CDS_TYPE(0), None) }
     };
     let mut r = try_set(hz);
     if r != DISP_CHANGE_SUCCESSFUL && hz > 0 {
