@@ -17,6 +17,22 @@ pub fn downloads_dir(token: Option<HANDLE>) -> Option<PathBuf> {
     }
 }
 
+/// `%LOCALAPPDATA%` of the user (`token`) or of the calling process.
+pub fn local_app_data(token: Option<HANDLE>) -> Option<PathBuf> {
+    unsafe {
+        let p = SHGetKnownFolderPath(&windows::Win32::UI::Shell::FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG(0), token.unwrap_or_default()).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s.map(PathBuf::from)
+    }
+}
+
+/// Where files pasted from the other computer are fetched to (one folder per
+/// copy): `%LOCALAPPDATA%\NyaRemoteControl\clipboard`.
+pub fn clipboard_cache_dir(token: Option<HANDLE>) -> Option<PathBuf> {
+    local_app_data(token).map(|d| d.join("NyaRemoteControl").join("clipboard"))
+}
+
 /// Where received files go: `<Downloads>\NyaRemoteControl`.
 pub fn receive_dir(token: Option<HANDLE>) -> Option<PathBuf> {
     downloads_dir(token).map(|d| d.join("NyaRemoteControl"))

@@ -71,6 +71,7 @@ enum Feature {
   FEATURE_USB_REDIRECT = 11;      // since 1.1: USB/IP through a tunnel
   FEATURE_GAMEPAD = 12;           // since 1.1: XInput pads -> virtual Xbox 360 pads
   FEATURE_VIRTUAL_DISPLAY = 13;   // since 1.2: StartStream.display_setup
+  FEATURE_CLIPBOARD_FILES = 14;   // since 1.2: copied files offered both ways, fetched when pasted
 }
 
 // ============================================================================
@@ -324,6 +325,7 @@ enum FilePurpose {
   FILE_PURPOSE_UNSPECIFIED = 0;
   FILE_PURPOSE_SAVE = 1;              // save into the receiver's Downloads/NyaRemoteControl
   FILE_PURPOSE_CLIPBOARD_IMAGE = 2;   // CF_DIB bytes for the receiver's clipboard
+  FILE_PURPOSE_CLIPBOARD = 3;         // files being pasted: into the receiver's paste cache (since 1.2)
 }
 
 message FileHeader {
@@ -333,21 +335,29 @@ message FileHeader {
   FilePurpose purpose = 4;
   uint32 index = 5;         // 0-based position in the batch
   uint32 count = 6;         // files in the batch
+  string path = 7;          // relative path inside the batch, '/' separated (folders); since 1.2
 }
 
 message FileEntry {
-  string name = 1;
+  string name = 1;          // file name only
   uint64 size = 2;
+  string path = 3;          // relative path, '/' separated, e.g. "photos/2026/a.jpg"; since 1.2
+  bool is_dir = 4;          // a folder (listed so empty folders are recreated); since 1.2
 }
 
-// Host -> client: files were copied on the host; the client may request them.
+// Files were copied on one side; the other side may request them. Host ->
+// client since 1.0; client -> host too with FEATURE_CLIPBOARD_FILES, where the
+// receiver puts them on its clipboard and requests them when they are pasted.
 message FileOffer {
   uint64 transfer_id = 1;
   repeated FileEntry files = 2;
 }
 
-// Client -> host: send the files of this offer.
-message FileRequest { uint64 transfer_id = 1; }
+// Send the files of this offer.
+message FileRequest {
+  uint64 transfer_id = 1;
+  FilePurpose purpose = 2;   // UNSPECIFIED = SAVE (Downloads); CLIPBOARD = paste in progress (since 1.2)
+}
 
 // Receiver -> sender: outcome of a batch (or of one failed file).
 message FileResult {

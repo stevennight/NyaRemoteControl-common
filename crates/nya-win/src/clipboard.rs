@@ -113,26 +113,10 @@ pub fn get_files() -> Result<Option<Vec<std::path::PathBuf>>> {
 
 /// Put files on the clipboard so Explorer can paste them.
 pub fn set_files(paths: &[std::path::PathBuf]) -> Result<()> {
-    use windows::Win32::UI::Shell::DROPFILES;
-    let mut list: Vec<u16> = Vec::new();
-    for p in paths {
-        list.extend(p.as_os_str().to_string_lossy().encode_utf16());
-        list.push(0);
-    }
-    list.push(0);
-    let header = std::mem::size_of::<DROPFILES>();
+    let g = crate::clipboard_files::dropfiles(paths)?;
     let _open = Open::new()?;
     unsafe {
         EmptyClipboard()?;
-        let g = GlobalAlloc(GMEM_MOVEABLE, header + list.len() * 2)?;
-        let p = GlobalLock(g) as *mut u8;
-        if p.is_null() {
-            bail!("GlobalLock failed");
-        }
-        let df = DROPFILES { pFiles: header as u32, fWide: true.into(), ..Default::default() };
-        std::ptr::copy_nonoverlapping(&df as *const DROPFILES as *const u8, p, header);
-        std::ptr::copy_nonoverlapping(list.as_ptr() as *const u8, p.add(header), list.len() * 2);
-        let _ = GlobalUnlock(g);
         SetClipboardData(CF_HDROP, HANDLE(g.0))?;
     }
     Ok(())

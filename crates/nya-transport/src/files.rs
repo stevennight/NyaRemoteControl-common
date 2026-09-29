@@ -45,6 +45,138 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
         .unwrap()
 }
 
+/// One item of an offer: a file or a folder, with its path relative to the
+/// offer ('/' separated; the first component is the copied item's name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Item {
+    pub abs: PathBuf,
+    pub rel: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+/// Upper bound on the entries of one offer (a copied folder tree).
+pub const MAX_ITEMS: usize = 50_000;
+
+/// Copied files and folders, with folders expanded recursively. Links and
+/// unreadable entries are skipped.
+pub fn expand(paths: &[PathBuf]) -> Vec<Item> {
+    fn walk(abs: &Path, rel: String, out: &mut Vec<Item>) {
+        if out.len() >= MAX_ITEMS {
+            return;
+        }
+        let Ok(m) = std::fs::symlink_metadata(abs) else { return };
+        if m.file_type().is_symlink() {
+            return;
+        }
+        if m.is_dir() {
+            out.push(Item { abs: abs.to_path_buf(), rel: rel.clone(), size: 0, is_dir: true });
+            let Ok(rd) = std::fs::read_dir(abs) else { return };
+            let mut children: Vec<_> = rd.flatten().collect();
+            children.sort_by_key(|e| e.file_name());
+            for c in children {
+                let name = c.file_name().to_string_lossy().into_owned();
+                walk(&c.path(), format!("{rel}/{name}"), out);
+            }
+        } else if m.is_file() {
+            out.push(Item { abs: abs.to_path_buf(), rel, size: m.len(), is_dir: false });
+        }
+    }
+    let mut out = Vec::new();
+    for p in paths {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+        walk(p, name, &mut out);
+    }
+    out
+}
+
+/// A received relative path as a safe path below the target folder: every
+/// component sanitized, no "..", no drive or root.
+pub fn safe_rel_path(rel: &str) -> PathBuf {
+    let mut p = PathBuf::new();
+    for c in rel.split(['/', '\\']).filter(|c| !c.is_empty() && *c != "." && *c != "..") {
+        p.push(sanitize_name(c));
+    }
+    if p.as_os_str().is_empty() {
+        p.push("file");
+    }
+    p
+}
+
+/// The top-level items of an offer received into `root` (what goes on the
+/// clipboard: the copied files and folders themselves).
+pub fn top_level(root: &Path, rels: impl IntoIterator<Item = String>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for rel in rels {
+        if let Some(first) = safe_rel_path(&rel).components().next() {
+            let p = root.join(first.as_os_str());
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Receive the payload into `root` at the header's relative path (a paste in
+/// progress; the folder is fresh, existing files are replaced).
+pub async fn receive_to_tree(r: &mut RecvStream, h: &FileHeader, root: &Path, mut progress: impl FnMut(u64)) -> Result<PathBuf> {
+    let rel = if h.path.is_empty() { h.name.as_str() } else { h.path.as_str() };
+    let final_path = root.join(safe_rel_path(rel));
+    if let Some(dir) = final_path.parent() {
+        tokio::fs::create_dir_all(dir).await.with_context(|| format!("创建 {}", dir.display()))?;
+    }
+    let part = final_path.with_extension(format!(
+        "{}nyapart",
+        final_path.extension().map(|e| format!("{}.", e.to_string_lossy())).unwrap_or_default()
+    ));
+    let mut f = tokio::fs::File::create(&part).await.with_context(|| format!("创建 {}", part.display()))?;
+    let res = async {
+        let mut buf = vec![0u8; CHUNK];
+        let mut left = h.size;
+        while left > 0 {
+            let n = r.read(&mut buf[..(left.min(CHUNK as u64) as usize)]).await?.unwrap_or(0);
+            if n == 0 {
+                bail!("传输中断（{} 还差 {left} 字节）", rel);
+            }
+            f.write_all(&buf[..n]).await?;
+            left -= n as u64;
+            progress(n as u64);
+        }
+        f.flush().await?;
+        Ok(())
+    }
+    .await;
+    drop(f);
+    match res {
+        Ok(()) => {
+            let _ = tokio::fs::remove_file(&final_path).await;
+            tokio::fs::rename(&part, &final_path).await?;
+            Ok(final_path)
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            Err(e)
+        }
+    }
+}
+
+/// Delete paste caches (`root/<id>`) older than a day.
+pub fn prune_cache(root: &Path) {
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    for e in rd.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > std::time::Duration::from_secs(24 * 3600));
+        if old {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 /// Send one file (from disk) on a new uni stream. `progress(bytes)` is called per chunk.
 pub async fn send_file(conn: &Connection, header: FileHeader, path: &Path, mut progress: impl FnMut(u64)) -> Result<()> {
     let mut file = tokio::fs::File::open(path).await.with_context(|| format!("打开 {}", path.display()))?;
@@ -165,6 +297,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn relative_paths() {
+        assert_eq!(safe_rel_path("a/b/c.txt"), PathBuf::from("a").join("b").join("c.txt"));
+        assert_eq!(safe_rel_path("../../evil.exe"), PathBuf::from("evil.exe"));
+        assert_eq!(safe_rel_path(r"C:\Windows\x"), PathBuf::from("C_").join("Windows").join("x"));
+        assert_eq!(safe_rel_path("/"), PathBuf::from("file"));
+        let root = PathBuf::from(r"D:\cache\1");
+        let top = top_level(&root, ["docs".into(), "docs/a.txt".into(), "b.txt".into()]);
+        assert_eq!(top, vec![root.join("docs"), root.join("b.txt")]);
+    }
+
+    #[test]
+    fn expands_folders() {
+        let base = std::env::temp_dir().join(format!("nya-expand-{}", nya_proto::now_us()));
+        std::fs::create_dir_all(base.join("dir/sub")).unwrap();
+        std::fs::create_dir_all(base.join("dir/empty")).unwrap();
+        std::fs::write(base.join("dir/sub/x.bin"), b"12345").unwrap();
+        std::fs::write(base.join("one.txt"), b"1").unwrap();
+        let items = expand(&[base.join("dir"), base.join("one.txt")]);
+        let rels: Vec<(&str, bool, u64)> = items.iter().map(|i| (i.rel.as_str(), i.is_dir, i.size)).collect();
+        assert_eq!(rels, vec![("dir", true, 0), ("dir/empty", true, 0), ("dir/sub", true, 0), ("dir/sub/x.bin", false, 5), ("one.txt", false, 1)]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[tokio::test]
     async fn file_roundtrip_over_quic() {
         use crate::endpoint::{client_endpoint, connect, server_endpoint};
@@ -189,7 +345,7 @@ mod tests {
         std::fs::write(&src, &data).unwrap();
         let ep = client_endpoint(addr).unwrap();
         let conn = connect(&ep, addr, &Identity::generate().unwrap(), None).await.unwrap();
-        let h = FileHeader { transfer_id: 1, name: "../x/data.bin".into(), size: data.len() as u64, purpose: 1, index: 0, count: 1 };
+        let h = FileHeader { transfer_id: 1, name: "../x/data.bin".into(), size: data.len() as u64, purpose: 1, index: 0, count: 1, ..Default::default() };
         let mut sent = 0;
         send_file(&conn, h, &src, |n| sent += n).await.unwrap();
         assert_eq!(sent, data.len() as u64);

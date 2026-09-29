@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod clipboard;
+pub mod clipboard_files;
 pub mod convert;
 pub mod d3d;
 pub mod desktop;

@@ -6,6 +6,7 @@
 //! * [`pairing`] – pairing code and HMAC transcript proofs
 //! * [`endpoint`] – quinn endpoints with tuned transport settings
 
+pub mod clipfiles;
 pub mod endpoint;
 pub mod files;
 pub mod identity;
