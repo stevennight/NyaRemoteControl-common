@@ -202,6 +202,9 @@ message DisplayInfo {
   uint32 gpu_index = 9;         // GPU the display is attached to (capture GPU)
   bool is_virtual = 10;         // the session's virtual display; since 1.2
   bool hdr = 11;                // HDR desktop (streamed tone-mapped to SDR); since 1.2
+  // 1-based position in DisplaySetup.virtual_screens (0 = physical display),
+  // so a client can size each virtual screen after the window showing it. Since 1.2.
+  uint32 virtual_index = 12;
 }
 
 message SessionInfo {
