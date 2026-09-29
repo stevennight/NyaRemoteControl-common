@@ -127,6 +127,10 @@
       <div class="text"><b>使用本机的缩放比例</b><span>本机 150% 时虚拟显示器也用 150%，文字大小一致</span></div>
       <Switch bind:checked={d.vd_scale} label="使用本机的缩放比例" disabled={d.vd_count === 0} />
     </div>
+    <div class="field">
+      <div class="text"><b>多个显示器的显示方式</b><span>被控端有多个显示器（物理或虚拟）时：在一个窗口里切换，或每个显示器一个窗口同时显示。连接后也可以在工具条的显示器菜单里点“新窗口”</span></div>
+      <Seg bind:value={d.multi_window} label="多个显示器的显示方式" options={[{ value: false, label: '一个窗口切换' }, { value: true, label: '每个显示器一个窗口' }]} />
+    </div>
   </div>
 
   <div class="card group">

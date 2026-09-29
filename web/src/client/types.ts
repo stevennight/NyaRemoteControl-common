@@ -21,6 +21,8 @@ export type Defaults = {
   vd_width: number;
   vd_height: number;
   vd_scale: boolean;
+  /** Every host display in its own window. */
+  multi_window: boolean;
 };
 
 export type Host = {
