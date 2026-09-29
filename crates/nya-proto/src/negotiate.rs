@@ -50,6 +50,7 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::Gamepad,
         Feature::VirtualDisplay,
         Feature::ClipboardFiles,
+        Feature::MultiStream,
     ]
     .into_iter()
     .map(|f| f as u32)

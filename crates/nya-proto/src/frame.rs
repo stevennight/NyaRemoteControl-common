@@ -10,6 +10,7 @@ use crate::pb::{Chroma, Codec};
 /// Uni-directional stream types (varint written first on the stream).
 pub mod stream_type {
     pub const INPUT: u64 = 1;
+    /// `varint stream_id`, then (FEATURE_MULTI_STREAM) `varint slot`, then frames.
     pub const VIDEO: u64 = 2;
     pub const CURSOR: u64 = 3;
     /// File / clipboard-image transfer (FileHeader + bytes), either direction.

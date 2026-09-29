@@ -72,6 +72,7 @@ enum Feature {
   FEATURE_GAMEPAD = 12;           // since 1.1: XInput pads -> virtual Xbox 360 pads
   FEATURE_VIRTUAL_DISPLAY = 13;   // since 1.2: StartStream.display_setup
   FEATURE_CLIPBOARD_FILES = 14;   // since 1.2: copied files offered both ways, fetched when pasted
+  FEATURE_MULTI_STREAM = 15;      // since 1.2: several displays at once, one stream per `slot`
 }
 
 // ============================================================================
@@ -250,7 +251,11 @@ message StartStream {
   uint32 display_id = 1;           // 0 = primary (the first virtual screen, when there are any)
   StreamConfig config = 2;
   string encoder_preference = 3;   // "", "auto", "nvenc", "qsv", "software"
-  DisplaySetup display_setup = 4;   // since 1.2 (feature VIRTUAL_DISPLAY)
+  DisplaySetup display_setup = 4;   // since 1.2 (feature VIRTUAL_DISPLAY); only slot 0's counts
+  // Which client window this stream is for (FEATURE_MULTI_STREAM). 0 = the
+  // main window; every other slot is an extra window showing another display.
+  // A StartStream for a new slot starts an additional stream. Since 1.2.
+  uint32 slot = 5;
 }
 
 // How the host's displays should look while the client is attached. Sent
@@ -281,12 +286,17 @@ message StreamStarted {
   uint32 source_width = 8;         // display size in pixels (cursor coordinates use this)
   uint32 source_height = 9;
   bool hdr_tonemapped = 10;        // HDR desktop converted to SDR; since 1.2
+  uint32 slot = 11;                // see StartStream.slot; since 1.2
 }
 
-message StreamError { string message = 1; }
-message StopStream {}
+message StreamError {
+  string message = 1;
+  uint32 slot = 2;   // since 1.2
+}
+// Stop the stream of `slot` (0 = the main window's; extra windows keep theirs).
+message StopStream { uint32 slot = 1; }
 message SetMode { StreamMode mode = 1; }
-message RequestKeyframe {}
+message RequestKeyframe { uint32 slot = 1; }
 message DisplayChanged { repeated DisplayInfo displays = 1; }
 
 message Ping { uint64 t_us = 1; }
@@ -310,6 +320,7 @@ message ServerStats {
   uint32 bitrate_kbps = 5;       // measured
   uint32 target_kbps = 6;        // current encoder target (adaptive bitrate); since 1.1
   string bitrate_note = 7;       // policy and reason of the last change; since 1.1
+  uint32 slot = 8;               // stream these numbers are about; since 1.2
 }
 
 message ClipboardText { string text = 1; }
@@ -408,7 +419,8 @@ message Gamepad {
 }
 
 // Coordinates normalised to 0..65535 across the streamed display.
-message MouseAbs { uint32 x = 1; uint32 y = 2; }
+// Coordinates normalised to 0..65535 across the display of `slot` (since 1.2).
+message MouseAbs { uint32 x = 1; uint32 y = 2; uint32 slot = 3; }
 message MouseRel { int32 dx = 1; int32 dy = 2; }
 message MouseButtonEv { MouseButton button = 1; bool down = 2; }
 // Units of 1/120 of a notch (WHEEL_DELTA).
@@ -442,4 +454,5 @@ message CursorState {
   bool visible = 2;
   int32 x = 3;      // hotspot position in source display pixels
   int32 y = 4;
+  uint32 slot = 5;  // stream whose display this is about (since 1.2)
 }
