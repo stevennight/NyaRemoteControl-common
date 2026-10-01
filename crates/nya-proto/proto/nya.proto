@@ -73,6 +73,7 @@ enum Feature {
   FEATURE_VIRTUAL_DISPLAY = 13;   // since 1.2: StartStream.display_setup
   FEATURE_CLIPBOARD_FILES = 14;   // since 1.2: copied files offered both ways, fetched when pasted
   FEATURE_MULTI_STREAM = 15;      // since 1.2: several displays at once, one stream per `slot`
+  FEATURE_MULTI_CLIENT = 16;      // since 1.2: several clients at once; one operates, the others watch
 }
 
 // ============================================================================
@@ -107,7 +108,25 @@ message ControlMsg {
     UsbDetach usb_detach = 24;       // since 1.1
     UsbStatus usb_status = 25;       // since 1.1
     GamepadRumble gamepad_rumble = 26;  // since 1.1
+    SessionRole session_role = 27;      // since 1.2 (MULTI_CLIENT)
+    TakeControl take_control = 28;      // since 1.2 (MULTI_CLIENT)
   }
+}
+
+// Host -> client (MULTI_CLIENT): who operates the host. Sent after connecting
+// and whenever it changes. Without it, a client operates the host. Requests of
+// a watching client that change the host (input, stream settings, clipboard,
+// USB) are ignored; it gets the same picture as the operating client.
+message SessionRole {
+  bool controlling = 1;          // this client operates the host
+  string controller = 2;         // name of the operating client ('' = nobody)
+  repeated string viewers = 3;   // names of the watching clients
+}
+
+// Client -> host (MULTI_CLIENT): a watching client takes over operating the
+// host. The previous operator watches from then on, or is disconnected (`kick`).
+message TakeControl {
+  bool kick = 1;
 }
 
 // Host -> client: force feedback for pad `index` (0..255 per motor).

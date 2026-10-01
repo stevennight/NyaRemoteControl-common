@@ -104,11 +104,20 @@
     <div class="conn">
       <div class="avatar">{session.client_name.slice(0, 1).toUpperCase()}</div>
       <div class="grow">
-        <b>{session.client_name}</b>
+        <b>{session.client_name} <span class="chip ok">正在操作</span></b>
         <span>来自 {session.remote_addr} · {since(session.since_unix)} · 客户端 {session.client_version}</span>
       </div>
-      <button class="btn danger" onclick={() => run('disconnect')}>断开</button>
+      <button class="btn danger" onclick={() => run('disconnect')}>{snap.status?.viewers?.length ? '全部断开' : '断开'}</button>
     </div>
+    {#each snap.status?.viewers ?? [] as v (v.remote_addr + v.since_unix)}
+      <div class="conn">
+        <div class="avatar">{v.client_name.slice(0, 1).toUpperCase()}</div>
+        <div class="grow">
+          <b>{v.client_name} <span class="chip">正在观看</span></b>
+          <span>来自 {v.remote_addr} · {since(v.since_unix)} · 客户端 {v.client_version}</span>
+        </div>
+      </div>
+    {/each}
     {#if stream}
       <dl class="kv"><dt>画面</dt><dd>{stream}</dd></dl>
     {/if}

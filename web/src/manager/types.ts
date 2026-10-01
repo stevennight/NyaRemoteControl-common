@@ -19,7 +19,10 @@ export type Status = {
   listen: string;
   listen_error: string;
   host: { running: boolean; console_session: number; stream: string } | null;
-  session: { client_name: string; client_version: string; remote_addr: string; since_unix: number } | null;
+  /** The operating client. */
+  session: Conn | null;
+  /** Clients watching (not operating). */
+  viewers: Conn[];
   recent: Event[];
 };
 
@@ -75,3 +78,5 @@ export function since(unix: number): string {
   if (m < 60) return `已连接 ${m} 分钟`;
   return `已连接 ${Math.floor(m / 60)} 小时 ${m % 60} 分钟`;
 }
+
+export type Conn = { client_name: string; client_version: string; remote_addr: string; since_unix: number };

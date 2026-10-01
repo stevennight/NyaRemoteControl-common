@@ -51,6 +51,7 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::VirtualDisplay,
         Feature::ClipboardFiles,
         Feature::MultiStream,
+        Feature::MultiClient,
     ]
     .into_iter()
     .map(|f| f as u32)

@@ -16,6 +16,7 @@ const snap: Snapshot = {
     listen_error: '',
     host: { running: true, console_session: 1, stream: '1920x1080@60 · hevc 4:4:4 · nvenc' },
     session: { client_name: 'DESKTOP-DEV', client_version: '0.2.0', remote_addr: '100.64.0.3:52011', since_unix: now - 42 * 60 },
+    viewers: [{ client_name: '笔记本', client_version: '0.2.0', remote_addr: '100.64.0.9:50122', since_unix: now - 5 * 60 }],
     recent: [
       { unix: now - 42 * 60, kind: 'connected', text: 'DESKTOP-DEV（100.64.0.3）已连接' },
       { unix: now - 95 * 60, kind: 'disconnected', text: 'DESKTOP-DEV 断开：网络中断' },
@@ -75,6 +76,7 @@ export const mock: Mock = async (cmd, args, emit) => {
       return '已移除';
     case 'disconnect':
       snap.status!.session = null;
+      snap.status!.viewers = [];
       emit('snapshot', structuredClone(snap));
       return '已断开';
     case 'components':
