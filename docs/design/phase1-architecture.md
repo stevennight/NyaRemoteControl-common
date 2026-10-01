@@ -512,7 +512,7 @@ u16 reserved
 | 1.0 | 第一阶段（M0–M7） | 已发布、已冻结 |
 | 1.1 | 文件传输、剪贴板图片、麦克风、USB 透传、手柄、码率策略、`ServerStats.target_kbps` | 已发布、已冻结 |
 | 1.2 | 虚拟显示器 / 隐私屏（`DisplaySetup`）、剪贴板文件、多画面（`slot`）、多客户端（`SessionRole` / `TakeControl`）、HDR 标记 | 已发布（server / client 0.2.0、0.3.0）、已冻结 |
-| 1.3 | `ServerStats.encode_ms_p99` | 开发中，发布时冻结 |
+| 1.3 | `ServerStats.encode_ms_p99` | 已发布（server / client 0.4.0）、已冻结 |
 
 **兼容性测试**
 - 每次发布，把 `.proto` 冻结一份到 `nya-proto/proto/history/vX.Y/`，并用 `NYA_BLESS=1 cargo test -p nya-proto --test compat` 生成 `tests/compat/vX.Y/`。发版脚本（`release-lib.ps1` 的 `Test-NyaProtoFrozen`）会检查当前协议版本已冻结且与冻结的 `.proto` 一致，否则拒绝发版。
