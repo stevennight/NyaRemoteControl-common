@@ -27,6 +27,8 @@ pub enum PixelLayout {
     Yuv444p,
     /// CPU semi-planar NV12
     Nv12Cpu,
+    /// CPU semi-planar P010 (10-bit in the top bits; NVDEC's 10-bit output)
+    P010Cpu,
     Other(i32),
 }
 
@@ -59,6 +61,22 @@ pub struct VideoDecoder {
     pkt: Packet,
     frame: Frame,
     hardware: bool,
+    /// Frames come out as D3D11 textures (D3D11VA); NVDEC hands over CPU frames.
+    gpu_frames: bool,
+}
+
+fn nvdec_name(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "h264_cuvid",
+        VideoCodec::Hevc => "hevc_cuvid",
+        VideoCodec::Av1 => "av1_cuvid",
+    }
+}
+
+/// FFmpeg has the NVDEC (cuvid) decoder for `codec`.
+pub fn nvdec_available(codec: VideoCodec) -> bool {
+    let n = std::ffi::CString::new(nvdec_name(codec)).unwrap();
+    !unsafe { ff::avcodec_find_decoder_by_name(n.as_ptr()) }.is_null()
 }
 
 unsafe impl Send for VideoDecoder {}
@@ -124,13 +142,36 @@ impl VideoDecoder {
                 (*ctx).thread_count = 0;
             }
         }
-        let d = Self { ctx, _device: device, pkt: Packet::new(), frame: Frame::new(), hardware };
+        let d = Self { ctx, _device: device, pkt: Packet::new(), frame: Frame::new(), hardware, gpu_frames: hardware };
         check(unsafe { ff::avcodec_open2(ctx, dec, ptr::null_mut()) }, "avcodec_open2(decoder)")?;
+        Ok(d)
+    }
+
+    /// NVIDIA's NVDEC through FFmpeg's cuvid decoder, for formats D3D11VA
+    /// lacks. Frames arrive in CPU memory.
+    pub fn new_nvdec(codec: VideoCodec) -> Result<Self> {
+        let name = std::ffi::CString::new(nvdec_name(codec)).unwrap();
+        let dec = unsafe { ff::avcodec_find_decoder_by_name(name.as_ptr()) };
+        if dec.is_null() {
+            bail!("FFmpeg has no {}", nvdec_name(codec));
+        }
+        let ctx = unsafe { ff::avcodec_alloc_context3(dec) };
+        if ctx.is_null() {
+            bail!("avcodec_alloc_context3 failed");
+        }
+        unsafe { (*ctx).flags |= ff::AV_CODEC_FLAG_LOW_DELAY as c_int };
+        let d = Self { ctx, _device: BufRef::null(), pkt: Packet::new(), frame: Frame::new(), hardware: true, gpu_frames: false };
+        check(unsafe { ff::avcodec_open2(ctx, dec, ptr::null_mut()) }, "avcodec_open2(nvdec)")?;
         Ok(d)
     }
 
     pub fn is_hardware(&self) -> bool {
         self.hardware
+    }
+
+    /// Frames are GPU textures (CPU frames from such a decoder mean it fell back to software).
+    pub fn gpu_frames(&self) -> bool {
+        self.gpu_frames
     }
 
     /// Decode one access unit; `on_frame` is called for each output picture.
@@ -175,11 +216,12 @@ impl VideoDecoder {
                         x if x == ff::AV_PIX_FMT_YUV444P || x == ff::AV_PIX_FMT_YUVJ444P => PixelLayout::Yuv444p,
                         x if x == ff::AV_PIX_FMT_NV12 => PixelLayout::Nv12Cpu,
                         x if x == ff::AV_PIX_FMT_YUV420P10LE => PixelLayout::Yuv420p10,
+                        x if x == ff::AV_PIX_FMT_P010LE => PixelLayout::P010Cpu,
                         x => PixelLayout::Other(x),
                     };
                     let rows = |i: usize| match (layout, i) {
-                        (PixelLayout::Yuv420p | PixelLayout::Yuv420p10, 1 | 2) | (PixelLayout::Nv12Cpu, 1) => h.div_ceil(2),
-                        (PixelLayout::Nv12Cpu, 2) => 0,
+                        (PixelLayout::Yuv420p | PixelLayout::Yuv420p10, 1 | 2) | (PixelLayout::Nv12Cpu | PixelLayout::P010Cpu, 1) => h.div_ceil(2),
+                        (PixelLayout::Nv12Cpu | PixelLayout::P010Cpu, 2) => 0,
                         _ => h,
                     };
                     let mut planes: [&[u8]; 3] = [&[], &[], &[]];
