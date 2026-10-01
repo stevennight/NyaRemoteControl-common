@@ -1,14 +1,17 @@
-// Desktop -> encoder input (NV12 planes / AYUV / BGRA), with scaling.
-// Colour: BT.709, limited range. Full-screen triangle, no vertex buffer.
-// Source: 8-bit BGRA (sRGB), or FP16 scRGB on HDR desktops, which is
-// tone-mapped to SDR here.
+// Desktop -> encoder input (NV12 planes / AYUV / BGRA / P010), with scaling.
+// Full-screen triangle, no vertex buffer.
+// SDR targets: BT.709, limited range. Source: 8-bit BGRA (sRGB), or FP16
+// scRGB on HDR desktops, which is tone-mapped to SDR here.
+// P010 target (HDR10): BT.2020 primaries, PQ, 10-bit limited range; an
+// 8-bit source is placed at the reference SDR white.
 
 Texture2D<float4> src_tex : register(t0);
 SamplerState lin : register(s0);
 
 cbuffer Params : register(b0) {
     float4 src_rect; // u0, v0, u1, v1
-    float4 hdr;      // x: 1 = scRGB source; y: factor that maps SDR white to 1.0
+    float4 hdr;      // x: 1 = scRGB source; y: factor that maps SDR white to 1.0 (tone-mapping);
+                     // w: scRGB value of SDR white for an 8-bit source going to PQ
 };
 
 struct VSOut {
@@ -40,6 +43,12 @@ float3 srgb_oetf(float3 c) {
     return lerp(lo, hi, step(0.0031308, c));
 }
 
+float3 srgb_eotf(float3 c) {
+    float3 lo = c / 12.92;
+    float3 hi = pow((c + 0.055) / 1.055, 2.4);
+    return lerp(lo, hi, step(0.04045, c));
+}
+
 float3 fetch(float2 uv) {
     float3 c = src_tex.Sample(lin, uv).rgb;
     return hdr.x > 0.5 ? srgb_oetf(tonemap(c)) : c;
@@ -68,3 +77,43 @@ float4 ps_ayuv(VSOut i) : SV_Target {
 
 // Plain (scaled) copy, e.g. BGRA for NVENC's internal 4:4:4 conversion.
 float4 ps_copy(VSOut i) : SV_Target { return float4(fetch(i.uv), 1.0); }
+
+// ---------------------------------------------------------------- HDR10 (P010)
+
+// Rows: BT.2020 RGB from linear BT.709 RGB.
+static const float3x3 BT709_TO_2020 = {
+    0.627404, 0.329283, 0.043313,
+    0.069097, 0.919540, 0.011362,
+    0.016391, 0.088013, 0.895595,
+};
+
+// SMPTE ST 2084 inverse EOTF: absolute nits -> PQ signal.
+float3 pq_oetf(float3 nits) {
+    const float m1 = 0.1593017578125, m2 = 78.84375;
+    const float c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+    float3 p = pow(saturate(nits / 10000.0), m1);
+    return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+}
+
+// PQ-encoded BT.2020 R'G'B' of the source.
+float3 fetch_pq(float2 uv) {
+    float3 c = src_tex.Sample(lin, uv).rgb;
+    float3 lin709 = hdr.x > 0.5 ? c : srgb_eotf(c) * hdr.w;   // scRGB: 1.0 = 80 nits
+    return pq_oetf(max(mul(BT709_TO_2020, lin709), 0.0) * 80.0);
+}
+
+static const float3 KY2020 = float3(0.2627, 0.6780, 0.0593);
+
+// 10-bit limited-range codes, stored in the top bits of a 16-bit unorm (P010).
+float to_p010(float code) { return code * 64.0 / 65535.0; }
+
+float ps_y10(VSOut i) : SV_Target {
+    return to_p010(64.0 + 876.0 * dot(fetch_pq(i.uv), KY2020));
+}
+
+float2 ps_uv10(VSOut i) : SV_Target {
+    float3 c = fetch_pq(i.uv);
+    float y = dot(c, KY2020);
+    float2 cbcr = float2((c.b - y) / 1.8814, (c.r - y) / 1.4746);
+    return float2(to_p010(512.0 + 896.0 * cbcr.x), to_p010(512.0 + 896.0 * cbcr.y));
+}

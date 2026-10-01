@@ -300,8 +300,11 @@ helper 启动时（以及拓扑变化时）：
 - 窗口拖到另一块 GPU 的显示器上时，重建解码和渲染设备，并请求关键帧。
 
 ### 3.6 HDR 桌面
-- 被控端显示器开启 HDR 时，DXGI 复制得到 FP16 scRGB 画面；颜色转换 shader 先做色调映射，以 Windows "SDR 内容亮度"（`DISPLAYCONFIG_SDR_WHITE_LEVEL`）为白点转换到 SDR，再走正常的 4:2:0 / 4:4:4 编码。客户端看到的和 SDR 显示器上一样，`StreamStarted.hdr_tonemapped` 告知客户端。
-- 尚未实现：把 HDR 原样（10 bit、PQ）传给支持 HDR 的客户端。
+- 被控端显示器开启 HDR 时，DXGI 复制得到 FP16 scRGB 画面。默认由颜色转换 shader 做色调映射，以 Windows "SDR 内容亮度"（`DISPLAYCONFIG_SDR_WHITE_LEVEL`）为白点转换到 SDR，再走正常的 4:2:0 / 4:4:4 编码。客户端看到的和 SDR 显示器上一样，`StreamStarted.hdr_tonemapped` 告知客户端。
+- **HDR10 直通**（`FEATURE_HDR`，协议 1.4）：客户端窗口所在显示器开着 HDR、设置里允许时，在 `StreamConfig.hdr` 里请求；`ClientCaps` 里 `CodecCap.ten_bit` 表示能解 HEVC Main10（硬解或软解）。被控端桌面是 HDR 时，选择方案把"采集 GPU 上的 HEVC 4:2:0 + HDR"排在最前（NVENC / QSV / AMF；P010 不跨显卡），失败再退回 SDR 方案。
+  - 被控端：转换 shader 把 scRGB 从 BT.709 转到 BT.2020，乘 80 得到绝对亮度，PQ 编码，再按 BT.2020 非恒定亮度矩阵、10 bit 有限范围写进 P010（Y / UV 两个渲染目标）；码流标记 BT.2020 / SMPTE 2084，Main10 profile，自动码率多给 25 %。运行中 HDR 被关掉时，8 bit 桌面按 203 nit（BT.2408 参考白）放进 PQ。
+  - 客户端：解码出 P010（硬解）或 yuv420p10（软解），渲染 shader 支持 10 bit 偏移与 BT.2020 矩阵。窗口所在显示器开着 HDR 时，交换链切到 FP16 scRGB（`RGB_FULL_G10_NONE_P709`），PQ 解码后按绝对亮度输出；SDR 视频和界面按该显示器的 SDR 白输出，界面先画到 8 bit 图层再合成。显示器不是 HDR（例如窗口拖到别的屏幕）时，在本机把 HDR10 色调映射到 SDR（203 nit 为白）。窗口移动和每秒检查一次显示器的 HDR 状态。
+  - 统计面板显示"HDR10 直通"；`nya-server diag` 列出各编码器能否打开 HDR10。
 
 ---
 
@@ -514,7 +517,7 @@ u16 reserved
 | 1.1 | 文件传输、剪贴板图片、麦克风、USB 透传、手柄、码率策略、`ServerStats.target_kbps` | 已发布、已冻结 |
 | 1.2 | 虚拟显示器 / 隐私屏（`DisplaySetup`）、剪贴板文件、多画面（`slot`）、多客户端（`SessionRole` / `TakeControl`）、HDR 标记 | 已发布（server / client 0.2.0、0.3.0）、已冻结 |
 | 1.3 | `ServerStats.encode_ms_p99` | 已发布（server / client 0.4.0）、已冻结 |
-| 1.4 | 视频数据报 + 纠错（`FEATURE_VIDEO_DATAGRAM`、`StreamConfig.video_transport`、`ClientStats` 分片统计、`ServerStats.fec_percent`）；文件夹挂载（`FEATURE_FOLDER_MOUNT`、`SharedFolders` / `FolderMountStatus`、FS 流与 `FsRequest` / `FsReply`）；打印到客户端（`FEATURE_PRINT`、`FilePurpose.PRINT`） | 开发中，发布时冻结 |
+| 1.4 | 视频数据报 + 纠错（`FEATURE_VIDEO_DATAGRAM`、`StreamConfig.video_transport`、`ClientStats` 分片统计、`ServerStats.fec_percent`）；文件夹挂载（`FEATURE_FOLDER_MOUNT`、`SharedFolders` / `FolderMountStatus`、FS 流与 `FsRequest` / `FsReply`）；打印到客户端（`FEATURE_PRINT`、`FilePurpose.PRINT`）；HDR10 直通（`FEATURE_HDR`、`StreamConfig.hdr`、`CodecCap.ten_bit`） | 开发中，发布时冻结 |
 
 **兼容性测试**
 - 每次发布，把 `.proto` 冻结一份到 `nya-proto/proto/history/vX.Y/`，并用 `NYA_BLESS=1 cargo test -p nya-proto --test compat` 生成 `tests/compat/vX.Y/`。发版脚本（`release-lib.ps1` 的 `Test-NyaProtoFrozen`）会检查当前协议版本已冻结且与冻结的 `.proto` 一致，否则拒绝发版。
@@ -612,6 +615,7 @@ u16 reserved
 | R10 | 剪贴板文件：被控端资源管理器（普通用户）回调 SYSTEM 身份 helper 的 OLE 数据对象 | 依赖 `CoInitializeSecurity` 放开交互用户调用；被控端粘贴失败时先查这里 |
 | R11 | 自动更新后服务没有恢复，被控端失联 | 独立更新程序：备份 → 安装 → 等新服务应答 → 失败则回滚，最后总是确保服务在运行（§14.8）；需实机演练 |
 | R12 | 文件夹挂载：WinFsp FUSE 接口是按其头文件手写的绑定（结构布局有单元测试核对），开发机没装 WinFsp，挂载本身未实测 | 实机安装 WinFsp 后验证；失败时查服务日志里的 mount / folder request 记录 |
+| R13 | HDR10 直通：客户端 HDR 输出（FP16 交换链、界面合成）只在没有 HDR 显示器的机器上做过编译和数学测试 | 有 HDR 显示器后实测；设置里可关掉"HDR 直通"退回原来的 SDR 传输 |
 
 ---
 
@@ -658,7 +662,6 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | 游戏模式弱网：视频走数据报 + FEC | ✅ 已实现（§6.5） |
 
 **其他待做**
-- HDR 原样传给 HDR 客户端（§3.6）。
 - 丢包时用 Opus PLC 代替补静音（§5）。
 - 客户端 D3D11VA 不支持 HEVC 4:4:4 时回退到 NVDEC（`hevc_cuvid`）：目前直接降为 4:2:0，没有需要前不做。
 
@@ -680,6 +683,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | | 视频数据报 + 纠错（游戏模式默认，§6.5） |
 | | 文件夹挂载（WinFsp 驱动加载、盘符出现在用户会话、资源管理器读写、大文件速度） |
 | | 打印到客户端（添加打印机、文件端口写入权限、客户端打印效果） |
+| | HDR10 直通（被控端 GTX 1650 的 Main10 编码可用 `diag` 验证；客户端 HDR 显示需要 HDR 显示器，现有测试机没有） |
 | | 管理程序 + 控制管道（服务模式下的管道权限） |
 | | 安装包升级、自动更新与回滚（R11；0.2.0 安装的被控端没有更新程序，第一次需手动升级） |
 | | QSV、AMF、跨显卡传输（需要对应硬件） |

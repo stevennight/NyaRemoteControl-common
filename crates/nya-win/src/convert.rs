@@ -1,5 +1,5 @@
 //! GPU colour conversion: BGRA desktop texture → encoder input texture
-//! (NV12 / AYUV / BGRA), optionally scaled. Renders into array slices, so it
+//! (NV12 / AYUV / BGRA, or P010 for HDR10), optionally scaled. Renders into array slices, so it
 //! can target FFmpeg's hardware frame pools directly.
 
 use std::collections::HashMap;
@@ -9,8 +9,9 @@ use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_AYUV, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
+    DXGI_FORMAT, DXGI_FORMAT_AYUV, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010,
+    DXGI_FORMAT_R16G16_UNORM, DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM,
+    DXGI_FORMAT_R8_UNORM,
 };
 
 use crate::d3d::{compile_shader, D3dDevice};
@@ -22,6 +23,8 @@ pub enum TargetFormat {
     Nv12,
     Ayuv,
     Bgra,
+    /// HDR10: BT.2020, PQ, 10-bit 4:2:0.
+    P010,
 }
 
 impl TargetFormat {
@@ -30,9 +33,14 @@ impl TargetFormat {
             Self::Nv12 => DXGI_FORMAT_NV12,
             Self::Ayuv => DXGI_FORMAT_AYUV,
             Self::Bgra => DXGI_FORMAT_B8G8R8A8_UNORM,
+            Self::P010 => DXGI_FORMAT_P010,
         }
     }
 }
+
+/// Reference SDR white in an HDR10 picture (ITU-R BT.2408): where an 8-bit
+/// desktop lands when it goes into an HDR encoder.
+pub const HDR_REFERENCE_WHITE_NITS: f32 = 203.0;
 
 pub struct Converter {
     dev: D3dDevice,
@@ -41,6 +49,8 @@ pub struct Converter {
     ps_uv: ID3D11PixelShader,
     ps_ayuv: ID3D11PixelShader,
     ps_copy: ID3D11PixelShader,
+    ps_y10: ID3D11PixelShader,
+    ps_uv10: ID3D11PixelShader,
     sampler: ID3D11SamplerState,
     cbuf: ID3D11Buffer,
     /// SDR white level (nits) when the source is an HDR (scRGB) desktop.
@@ -88,6 +98,8 @@ impl Converter {
             ps_uv: ps("ps_uv")?,
             ps_ayuv: ps("ps_ayuv")?,
             ps_copy: ps("ps_copy")?,
+            ps_y10: ps("ps_y10")?,
+            ps_uv10: ps("ps_uv10")?,
             sampler: sampler.unwrap(),
             cbuf: cbuf.unwrap(),
             hdr: None,
@@ -101,11 +113,12 @@ impl Converter {
             Some(nits) => (1.0, 80.0 / nits.max(1.0)),
             None => (0.0, 1.0),
         };
-        [0.0, 0.0, 1.0, 1.0, on, scale, 0.0, 0.0]
+        [0.0, 0.0, 1.0, 1.0, on, scale, 0.0, HDR_REFERENCE_WHITE_NITS / 80.0]
     }
 
     /// Source is an HDR desktop (FP16 scRGB) whose SDR white is `sdr_white_nits`
-    /// bright: tone-map to SDR. `None` = ordinary 8-bit sRGB source.
+    /// bright: SDR targets tone-map it, P010 keeps it HDR. `None` = ordinary
+    /// 8-bit sRGB source.
     pub fn set_hdr(&mut self, sdr_white_nits: Option<f32>) {
         if self.hdr == sdr_white_nits {
             return;
@@ -150,6 +163,10 @@ impl Converter {
             }
             TargetFormat::Bgra => {
                 self.rtv(dst, slice, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+            }
+            TargetFormat::P010 => {
+                self.rtv(dst, slice, DXGI_FORMAT_R16_UNORM)?;
+                self.rtv(dst, slice, DXGI_FORMAT_R16G16_UNORM)?;
             }
         }
         Ok(())
@@ -204,6 +221,12 @@ impl Converter {
                 let v = self.rtv(dst, slice, DXGI_FORMAT_B8G8R8A8_UNORM)?;
                 self.pass(&v, &self.ps_copy, w, h);
             }
+            TargetFormat::P010 => {
+                let y = self.rtv(dst, slice, DXGI_FORMAT_R16_UNORM)?;
+                let uv = self.rtv(dst, slice, DXGI_FORMAT_R16G16_UNORM)?;
+                self.pass(&y, &self.ps_y10, w, h);
+                self.pass(&uv, &self.ps_uv10, w / 2, h / 2);
+            }
         }
         unsafe {
             ctx.OMSetRenderTargets(None, None);
@@ -221,7 +244,7 @@ mod tests {
     #[test]
     fn shaders_compile() {
         compile_shader(HLSL, "vs_main", "vs_4_0").unwrap();
-        for ps in ["ps_y", "ps_uv", "ps_ayuv", "ps_copy"] {
+        for ps in ["ps_y", "ps_uv", "ps_ayuv", "ps_copy", "ps_y10", "ps_uv10"] {
             compile_shader(HLSL, ps, "ps_4_0").unwrap();
         }
     }

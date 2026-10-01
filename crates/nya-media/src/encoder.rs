@@ -10,6 +10,9 @@
 //! | QSV      | NV12        | VUYX / AYUV (HEVC only)                       |
 //! | AMF      | NV12        | —                                            |
 //! | software | CPU YUV420P | —                                            |
+//!
+//! HDR10 (`EncoderConfig::hdr`, HEVC Main10 on NVENC / QSV / AMF): P010
+//! input holding BT.2020 PQ, tagged as such in the bitstream.
 
 use std::ffi::CString;
 use std::os::raw::c_int;
@@ -69,6 +72,11 @@ impl Backend {
         self != Self::Software
     }
 
+    /// Whether this backend can produce HDR10 (10-bit 4:2:0, PQ) for `codec`.
+    pub fn supports_hdr(self, codec: VideoCodec) -> bool {
+        matches!((self, codec), (Self::Nvenc | Self::Qsv | Self::Amf, VideoCodec::Hevc))
+    }
+
     /// Whether this backend can produce 4:4:4 for `codec` at all.
     pub fn supports_444(self, codec: VideoCodec) -> bool {
         matches!((self, codec), (Self::Nvenc, VideoCodec::H264 | VideoCodec::Hevc) | (Self::Qsv, VideoCodec::Hevc))
@@ -81,6 +89,8 @@ pub enum InputFormat {
     Nv12,
     Bgra,
     Ayuv,
+    /// 10-bit 4:2:0 (HDR10).
+    P010,
     /// CPU memory, filled with [`VideoEncoder::encode_nv12_cpu`].
     CpuNv12,
 }
@@ -96,6 +106,8 @@ pub struct EncoderConfig {
     pub bitrate_kbps: u32,
     /// Game mode: fastest preset, CBR, tight VBV. Office: better quality, room for bursts.
     pub game_mode: bool,
+    /// HDR10: P010 input (BT.2020, PQ), Main10 profile.
+    pub hdr: bool,
 }
 
 pub struct EncodedPacket {
@@ -170,6 +182,9 @@ impl VideoEncoder {
         if cfg.yuv444 && !cfg.backend.supports_444(cfg.codec) {
             bail!("{name} 不支持 4:4:4");
         }
+        if cfg.hdr && (cfg.yuv444 || !cfg.backend.supports_hdr(cfg.codec)) {
+            bail!("{name} 不支持 HDR10（需要 HEVC 4:2:0 硬件编码）");
+        }
         if cfg.width % 2 != 0 || cfg.height % 2 != 0 || cfg.width == 0 || cfg.height == 0 {
             bail!("分辨率必须为非零偶数：{}x{}", cfg.width, cfg.height);
         }
@@ -193,7 +208,12 @@ impl VideoEncoder {
                     bail!("hardware encoder needs a D3D11 device");
                 }
                 device = d3d11_device_ctx(d3d_device)?;
-                if cfg.yuv444 {
+                if cfg.hdr {
+                    let d3d = ff::AV_PIX_FMT_D3D11;
+                    frames = pool_frames(&device, d3d, ff::AV_PIX_FMT_P010LE, w, h, 6)
+                        .or_else(|_| pool_frames(&device, d3d, ff::AV_PIX_FMT_P010LE, w, h, 0))?;
+                    input = InputFormat::P010;
+                } else if cfg.yuv444 {
                     input = InputFormat::Bgra;
                     frames = pool_frames(&device, ff::AV_PIX_FMT_D3D11, ff::AV_PIX_FMT_BGRA, w, h, 6)?;
                 } else {
@@ -228,7 +248,9 @@ impl VideoEncoder {
                     "derive QSV device",
                 )?;
                 qsv_device = BufRef(q);
-                let (sw, inp) = if cfg.yuv444 {
+                let (sw, inp) = if cfg.hdr {
+                    (ff::AV_PIX_FMT_P010LE, InputFormat::P010)
+                } else if cfg.yuv444 {
                     (ff::AV_PIX_FMT_VUYX, InputFormat::Ayuv)
                 } else {
                     (ff::AV_PIX_FMT_NV12, InputFormat::Nv12)
@@ -282,9 +304,15 @@ impl VideoEncoder {
             (*c).rc_buffer_size = ((bitrate / fps as i64) * frames_in_vbv).min(i32::MAX as i64) as c_int;
             (*c).flags |= ff::AV_CODEC_FLAG_LOW_DELAY as c_int;
             (*c).color_range = ff::AVCOL_RANGE_MPEG;
-            (*c).colorspace = ff::AVCOL_SPC_BT709;
-            (*c).color_primaries = ff::AVCOL_PRI_BT709;
-            (*c).color_trc = ff::AVCOL_TRC_BT709;
+            if cfg.hdr {
+                (*c).colorspace = ff::AVCOL_SPC_BT2020_NCL;
+                (*c).color_primaries = ff::AVCOL_PRI_BT2020;
+                (*c).color_trc = ff::AVCOL_TRC_SMPTE2084;
+            } else {
+                (*c).colorspace = ff::AVCOL_SPC_BT709;
+                (*c).color_primaries = ff::AVCOL_PRI_BT709;
+                (*c).color_trc = ff::AVCOL_TRC_BT709;
+            }
             match self.input {
                 InputFormat::CpuNv12 => {
                     (*c).pix_fmt = ff::AV_PIX_FMT_YUV420P;
@@ -313,6 +341,9 @@ impl VideoEncoder {
                     opts.set("rgb_mode", "yuv444");
                     opts.set("profile", if cfg.codec == VideoCodec::H264 { "high444p" } else { "rext" });
                 }
+                if cfg.hdr {
+                    opts.set("profile", "main10");
+                }
             }
             Backend::Qsv => {
                 opts.set("preset", if game { "veryfast" } else { "medium" });
@@ -324,11 +355,17 @@ impl VideoEncoder {
                 if cfg.yuv444 {
                     opts.set("profile", "rext");
                 }
+                if cfg.hdr {
+                    opts.set("profile", "main10");
+                }
             }
             Backend::Amf => {
                 opts.set("usage", if game { "ultralowlatency" } else { "lowlatency" });
                 opts.set("quality", if game { "speed" } else { "balanced" });
                 opts.set("rc", "cbr");
+                if cfg.hdr {
+                    opts.set("profile", "main10");
+                }
             }
             Backend::Software => {
                 opts.set("allow_skip_frames", "0");

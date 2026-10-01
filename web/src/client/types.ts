@@ -34,6 +34,8 @@ export type Defaults = {
   /** Folders shown on the host as a drive. */
   shared_folders: SharedFolder[];
   print_mode: string; // print | open | save
+  /** HDR10 video when both the host desktop and this monitor are HDR. */
+  hdr: boolean;
 };
 
 export type Host = {

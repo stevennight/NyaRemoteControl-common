@@ -218,6 +218,10 @@
       </select>
     </div>
     <div class="field">
+      <div class="text"><b>HDR 直通</b><span>被控端和本机显示器都开启 HDR 时，用 HDR10 传输（10 bit），高光和色彩更完整；否则被控端转换为 SDR</span></div>
+      <Switch bind:checked={d.hdr} label="HDR 直通" />
+    </div>
+    <div class="field">
       <div class="text"><b>帧率上限</b><span>跟随本机显示器的刷新率，或手动限制</span></div>
       <div class="ctl">
         <Seg bind:value={fpsMode} label="帧率上限" options={[{ value: 'auto', label: '跟随显示器' }, { value: 'fixed', label: '限制' }]} />

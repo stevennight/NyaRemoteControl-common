@@ -17,6 +17,10 @@ pub enum PixelLayout {
     Nv12,
     /// D3D11 texture, DXGI AYUV (VUYX)
     Ayuv,
+    /// D3D11 texture, DXGI P010 (10-bit 4:2:0, values in the top bits)
+    P010,
+    /// CPU planar 10-bit 4:2:0 (16-bit little-endian samples, values in the low bits)
+    Yuv420p10,
     /// CPU planar 8-bit 4:2:0
     Yuv420p,
     /// CPU planar 8-bit 4:4:4
@@ -30,6 +34,7 @@ pub enum PixelLayout {
 pub enum Matrix {
     Bt709,
     Bt601,
+    Bt2020,
 }
 
 pub enum FrameData<'a> {
@@ -43,6 +48,8 @@ pub struct DecodedFrame<'a> {
     pub layout: PixelLayout,
     pub full_range: bool,
     pub matrix: Matrix,
+    /// HDR10: samples are PQ-encoded (SMPTE ST 2084).
+    pub pq: bool,
     pub data: FrameData<'a>,
 }
 
@@ -145,13 +152,16 @@ impl VideoDecoder {
                 let full_range = (*f).color_range == ff::AVCOL_RANGE_JPEG;
                 let matrix = match (*f).colorspace {
                     x if x == ff::AVCOL_SPC_BT470BG || x == ff::AVCOL_SPC_SMPTE170M => Matrix::Bt601,
+                    x if x == ff::AVCOL_SPC_BT2020_NCL || x == ff::AVCOL_SPC_BT2020_CL => Matrix::Bt2020,
                     _ => Matrix::Bt709,
                 };
+                let pq = (*f).color_trc == ff::AVCOL_TRC_SMPTE2084;
                 let (layout, data) = if (*f).format == ff::AV_PIX_FMT_D3D11 {
                     let fc = (*(*f).hw_frames_ctx).data as *const ff::AVHWFramesContext;
                     let layout = match (*fc).sw_format {
                         x if x == ff::AV_PIX_FMT_NV12 => PixelLayout::Nv12,
                         x if x == ff::AV_PIX_FMT_VUYX => PixelLayout::Ayuv,
+                        x if x == ff::AV_PIX_FMT_P010LE => PixelLayout::P010,
                         x => PixelLayout::Other(x),
                     };
                     (
@@ -164,10 +174,11 @@ impl VideoDecoder {
                         x if x == ff::AV_PIX_FMT_YUV420P || x == ff::AV_PIX_FMT_YUVJ420P => PixelLayout::Yuv420p,
                         x if x == ff::AV_PIX_FMT_YUV444P || x == ff::AV_PIX_FMT_YUVJ444P => PixelLayout::Yuv444p,
                         x if x == ff::AV_PIX_FMT_NV12 => PixelLayout::Nv12Cpu,
+                        x if x == ff::AV_PIX_FMT_YUV420P10LE => PixelLayout::Yuv420p10,
                         x => PixelLayout::Other(x),
                     };
                     let rows = |i: usize| match (layout, i) {
-                        (PixelLayout::Yuv420p, 1 | 2) | (PixelLayout::Nv12Cpu, 1) => h.div_ceil(2),
+                        (PixelLayout::Yuv420p | PixelLayout::Yuv420p10, 1 | 2) | (PixelLayout::Nv12Cpu, 1) => h.div_ceil(2),
                         (PixelLayout::Nv12Cpu, 2) => 0,
                         _ => h,
                     };
@@ -189,6 +200,7 @@ impl VideoDecoder {
                     layout,
                     full_range,
                     matrix,
+                    pq,
                     data,
                 });
                 ff::av_frame_unref(f);
@@ -215,6 +227,7 @@ mod tests {
             fps: 30,
             bitrate_kbps: 2000,
             game_mode: false,
+            hdr: false,
         };
         let mut enc = VideoEncoder::open(&cfg, std::ptr::null_mut()).unwrap();
         let mut dec = VideoDecoder::new(VideoCodec::H264, std::ptr::null_mut()).unwrap();

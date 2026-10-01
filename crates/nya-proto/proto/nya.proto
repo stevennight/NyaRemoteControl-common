@@ -77,6 +77,7 @@ enum Feature {
   FEATURE_VIDEO_DATAGRAM = 17;    // since 1.4: video as datagrams with FEC (StreamConfig.video_transport)
   FEATURE_FOLDER_MOUNT = 18;      // since 1.4: client folders as a drive on the host (SharedFolders, FS streams)
   FEATURE_PRINT = 19;             // since 1.4: host print jobs as PDF to the client (FilePurpose PRINT)
+  FEATURE_HDR = 20;               // since 1.4: HDR10 video (StreamConfig.hdr, CodecCap.ten_bit)
 }
 
 // ============================================================================
@@ -291,6 +292,7 @@ message CodecCap {
   uint32 max_width = 3;
   uint32 max_height = 4;
   bool hardware = 5;
+  bool ten_bit = 6;   // 10-bit 4:2:0 (HEVC Main10 / AV1 10-bit); since 1.4
 }
 
 message GpuInfo {
@@ -351,6 +353,9 @@ message StreamConfig {
   StreamMode mode = 7;
   BitratePolicy bitrate_policy = 8;   // since 1.1
   VideoTransport video_transport = 9; // since 1.4 (FEATURE_VIDEO_DATAGRAM)
+  // Request: the client shows HDR (its display is in HDR mode). Reply: the
+  // stream is HDR10 (HEVC Main10, BT.2020, PQ). Since 1.4 (FEATURE_HDR).
+  bool hdr = 10;
 }
 
 // How video frames travel (FEATURE_VIDEO_DATAGRAM; without it always a stream).

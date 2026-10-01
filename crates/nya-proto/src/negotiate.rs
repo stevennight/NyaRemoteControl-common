@@ -55,6 +55,7 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::VideoDatagram,
         Feature::FolderMount,
         Feature::Print,
+        Feature::Hdr,
     ]
     .into_iter()
     .map(|f| f as u32)
