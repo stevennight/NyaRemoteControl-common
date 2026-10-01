@@ -16,6 +16,7 @@ pub mod package;
 pub mod shell;
 pub mod topology;
 pub mod transfer;
+pub mod update;
 
 pub use windows;
 

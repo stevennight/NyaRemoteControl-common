@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
   import Modal from '../lib/Modal.svelte';
+  import UpdateCard from '../lib/UpdateCard.svelte';
   import { call, errorText } from '../lib/ipc';
   import { toast } from '../lib/notify.svelte';
   import { since, time, type Snapshot } from './types';
@@ -31,6 +32,16 @@
   function copy(text: string, what: string) {
     navigator.clipboard.writeText(text).then(() => toast(`已复制${what}`, 'ok'));
   }
+
+  let confirmUpdate = $state(false);
+  // Without a service that checks by itself: check once when the page opens.
+  let checkedOnce = false;
+  $effect(() => {
+    if (!checkedOnce && snap.elevated && snap.config.check_updates && !snap.update && !snap.busy) {
+      checkedOnce = true;
+      call('update_check').catch(() => {});
+    }
+  });
 
   const session = $derived(snap.status?.session ?? null);
   const stream = $derived(snap.status?.host?.stream ?? '');
@@ -125,6 +136,30 @@
     <div class="muted small">{snap.live ? '没有客户端连接' : '服务运行后显示'}</div>
   {/if}
 </div>
+
+<UpdateCard
+  info={snap.update}
+  current={snap.version}
+  note={snap.svc === 'running' && snap.live
+    ? '更新时服务会自动停止、安装并重启（约 1 分钟），正在进行的远程连接会断开并自动重连；新版本没能正常启动时自动恢复旧版本。'
+    : '将下载并打开安装程序。'}
+  oncheck={() => run('update_check')}
+  oninstall={() => (confirmUpdate = true)}
+/>
+
+{#if confirmUpdate}
+  <Modal title="安装更新" onclose={() => (confirmUpdate = false)}>
+    <p>更新到 {snap.update?.latest}？</p>
+    <p class="muted small">
+      {#if session}当前有客户端（{session.client_name}）连接着，更新期间会断开约 1 分钟，客户端会自动重连。{/if}
+      服务会在新版本安装后自动重启；如果新版本没能启动，会自动恢复到 {snap.update?.current}。
+    </p>
+    {#snippet footer()}
+      <button class="btn ghost" onclick={() => (confirmUpdate = false)}>取消</button>
+      <button class="btn primary" onclick={() => ((confirmUpdate = false), run('update_apply'))}>更新</button>
+    {/snippet}
+  </Modal>
+{/if}
 
 <div class="card panel">
   <h4>证书指纹<span class="r"><button class="btn sm ghost" onclick={() => copy(snap.fingerprint, '指纹')} disabled={!snap.fingerprint}><Icon name="copy" size={14} />复制</button></span></h4>

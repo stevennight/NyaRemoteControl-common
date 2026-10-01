@@ -8,6 +8,8 @@ const state: ClientState = {
   computer: 'DESKTOP-DEV',
   client_name: '',
   computer_name: 'DESKTOP-DEV',
+  check_updates: true,
+  update: { state: 'available', current: '0.2.0', latest: '0.2.1', notes: '- 修复：……\n- 新增：自动更新', page: 'https://github.com/stevennight/NyaRemoteControl-client/releases/tag/v0.2.1', progress: 0, message: '', checked_unix: now - 60 },
   decode: '硬件解码：不可用（软件解码）',
   hosts: [
     { name: '公司台式机', address: 'frp.dev.nyatori.com', paired: true, last_connected: now - 600, server_name: 'DESKTOP-GTX1650', custom_name: true, settings: null },
@@ -71,6 +73,25 @@ export const mock: Mock = async (cmd, args, emit) => {
       return clone();
     case 'reset_host_settings':
       state.hosts.find((h) => h.address === args.address)!.settings = null;
+      return clone();
+    case 'update_check':
+      state.update = { ...state.update, state: 'checking' };
+      emit('state', clone());
+      await wait(800);
+      state.update = { ...state.update, state: 'available', checked_unix: Math.floor(Date.now() / 1000) };
+      emit('state', clone());
+      return null;
+    case 'update_apply':
+      for (let p = 0; p <= 100; p += 20) {
+        state.update = { ...state.update, state: 'downloading', progress: p };
+        emit('state', clone());
+        await wait(300);
+      }
+      state.update = { ...state.update, state: 'installing', message: '正在安装，完成后会自动重新打开' };
+      emit('state', clone());
+      return null;
+    case 'set_check_updates':
+      state.check_updates = args.on;
       return clone();
     case 'set_client_name':
       state.client_name = args.name.trim();

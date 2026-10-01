@@ -38,6 +38,17 @@
   </div>
 </div>
 
+{#if cs.update.state === 'available'}
+  <div class="banner info upd">
+    <Icon name="download" /><span class="grow">有新版本 {cs.update.latest}（当前 {cs.update.current}）</span>
+    <button class="btn sm primary" onclick={() => call('update_apply').catch((e) => toast(errorText(e), 'error'))}>立即更新</button>
+  </div>
+{:else if cs.update.state === 'downloading' || cs.update.state === 'installing'}
+  <div class="banner info upd">
+    <Icon name="download" /><span class="grow">{cs.update.state === 'downloading' ? `正在下载 ${cs.update.latest}：${cs.update.progress}%` : cs.update.message}</span>
+  </div>
+{/if}
+
 <form class="quick card" onsubmit={quick}>
   <Icon name="link" />
   <input bind:value={address} placeholder="输入地址直接连接，例如 100.64.0.2 或 host:47100" aria-label="地址" spellcheck="false" />
@@ -85,6 +96,7 @@
 </div>
 
 <style>
+  .upd { margin-bottom: 16px; }
   .quick { display: flex; gap: 10px; align-items: center; padding: 8px 8px 8px 16px; margin-bottom: 22px; color: var(--text-3); }
   .quick input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); min-width: 0; padding: 4px 0; }
   .quick input::placeholder { color: var(--text-3); }

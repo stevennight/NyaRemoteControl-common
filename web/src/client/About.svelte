@@ -1,5 +1,7 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
+  import Switch from '../lib/Switch.svelte';
+  import UpdateCard from '../lib/UpdateCard.svelte';
   import { call, errorText } from '../lib/ipc';
   import { toast } from '../lib/notify.svelte';
   import type { ClientState } from './types';
@@ -10,6 +12,14 @@
   // svelte-ignore state_referenced_locally
   let myName = $state(cs.client_name);
   let savingName = $state(false);
+
+  async function setCheck(on: boolean) {
+    try {
+      onsaved(await call<ClientState>('set_check_updates', { on }));
+    } catch (e) {
+      toast(errorText(e), 'error');
+    }
+  }
 
   async function saveName(e: SubmitEvent) {
     e.preventDefault();
@@ -52,6 +62,20 @@
       </form>
     </div>
     <div class="field"><div class="text"><b>硬件解码</b><span>{cs.decode}</span></div></div>
+  </div>
+
+  <UpdateCard
+    info={cs.update}
+    current={cs.version}
+    note="下载后会请求一次管理员权限，然后客户端关闭、安装并自动重新打开；正在进行的远程连接会断开。"
+    oncheck={() => call('update_check').catch((e) => toast(errorText(e), 'error'))}
+    oninstall={() => call('update_apply').catch((e) => toast(errorText(e), 'error'))}
+  />
+  <div class="card group">
+    <div class="field">
+      <div class="text"><b>启动时检查新版本</b><span>从 GitHub 查看是否有新版本；是否安装由你决定</span></div>
+      <Switch bind:checked={() => cs.check_updates, (v) => setCheck(v)} label="启动时检查新版本" />
+    </div>
   </div>
 
   <div class="card group">

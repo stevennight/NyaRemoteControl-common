@@ -26,7 +26,8 @@ const snap: Snapshot = {
   },
   code: 'K7QM-2XRA-9PLE-4TCD-HW8N-3JFV',
   fingerprint: '3205 4309 b911 ee42 2458 2fe7 9fc1 1c44',
-  config: { port: 47100, bind: '::', name: '', encoder: 'auto', office_bitrate_kbps: 0, game_bitrate_kbps: 0, max_fps: 144, audio: true, log_level: 'info' },
+  config: { port: 47100, bind: '::', name: '', encoder: 'auto', office_bitrate_kbps: 0, game_bitrate_kbps: 0, max_fps: 144, audio: true, log_level: 'info', check_updates: true },
+  update: { state: 'available', current: '0.2.0', latest: '0.2.1', notes: '- 修复：……\n- 新增：自动更新', page: 'https://github.com/stevennight/NyaRemoteControl-server/releases/tag/v0.2.1', progress: 0, message: '', checked_unix: Math.floor(Date.now() / 1000) - 600 },
   encoders: ['auto', 'nvenc', 'qsv', 'amf', 'software'],
   clients: [
     { fingerprint: 'a81c2f0d9e6b4471c0de55aa', name: 'DESKTOP-DEV', paired_at: '2026-09-27 17:05' },
@@ -63,6 +64,20 @@ export const mock: Mock = async (cmd, args, emit) => {
       emit('snapshot', structuredClone(snap));
       return `${label}完成`;
     }
+    case 'update_check':
+      await wait(600);
+      snap.update = { ...snap.update!, state: 'available', checked_unix: Math.floor(Date.now() / 1000) };
+      emit('snapshot', structuredClone(snap));
+      return `有新版本 ${snap.update.latest}`;
+    case 'update_apply':
+      for (let p = 0; p <= 100; p += 25) {
+        snap.update = { ...snap.update!, state: 'downloading', progress: p };
+        emit('snapshot', structuredClone(snap));
+        await wait(300);
+      }
+      snap.update = { ...snap.update!, state: 'installing', message: '正在安装 0.2.1，服务会重启，约 1 分钟后恢复；连接会自动重连' };
+      emit('snapshot', structuredClone(snap));
+      return '正在下载 0.2.1';
     case 'reset_code':
       snap.code = 'Q2WE-8RTY-4UIO-PL9K-3JHG-7FDS';
       emit('snapshot', structuredClone(snap));

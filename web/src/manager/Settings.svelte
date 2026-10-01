@@ -91,6 +91,14 @@
   </div>
 
   <div class="card group">
+    <h3>更新</h3>
+    <div class="field">
+      <div class="text"><b>自动检查新版本</b><span>每 12 小时查看一次 GitHub 上的新版本，在“概览”里提示；是否安装由你决定</span></div>
+      <Switch bind:checked={c.check_updates} label="自动检查新版本" />
+    </div>
+  </div>
+
+  <div class="card group">
     <h3>日志</h3>
     <div class="field">
       <div class="text"><b>日志级别</b><span>排查问题时改成 debug，服务重启后生效</span></div>

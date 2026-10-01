@@ -32,7 +32,8 @@ pub struct Package {
 /// Progress callback: (bytes done, total if known).
 pub type Progress<'a> = &'a mut dyn FnMut(u64, Option<u64>);
 
-fn sha256_file(p: &Path) -> Result<String> {
+/// Lower-case hex SHA-256 of a file.
+pub fn sha256_file(p: &Path) -> Result<String> {
     let mut f = std::fs::File::open(p)?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
@@ -106,6 +107,29 @@ fn query_u64(h: &Inet, what: u32) -> Option<u64> {
 
 /// HTTP(S) GET to a file, following redirects, using the system proxy settings.
 pub fn download(url: &str, dest: &Path, progress: Progress) -> Result<()> {
+    let mut f = std::fs::File::create(dest)?;
+    get(url, &mut |chunk| f.write_all(chunk).map_err(Into::into), progress)
+}
+
+/// A small HTTP(S) resource (API answer, checksum file) in memory, at most `limit` bytes.
+pub fn fetch(url: &str, limit: usize) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    get(
+        url,
+        &mut |chunk| {
+            if out.len() + chunk.len() > limit {
+                bail!("{url} 太大（超过 {limit} 字节）");
+            }
+            out.extend_from_slice(chunk);
+            Ok(())
+        },
+        &mut |_, _| {},
+    )?;
+    Ok(out)
+}
+
+/// GET `url` (system proxy, 30 s timeouts), handing the body to `sink` piece by piece.
+fn get(url: &str, sink: &mut dyn FnMut(&[u8]) -> Result<()>, progress: Progress) -> Result<()> {
     unsafe {
         let session = InternetOpenW(w!("NyaRemoteControl"), INTERNET_OPEN_TYPE_PRECONFIG.0, PCWSTR::null(), PCWSTR::null(), 0);
         if session.is_null() {
@@ -133,7 +157,6 @@ pub fn download(url: &str, dest: &Path, progress: Progress) -> Result<()> {
             }
         }
         let total = query_u64(&req, HTTP_QUERY_CONTENT_LENGTH);
-        let mut f = std::fs::File::create(dest)?;
         let mut buf = vec![0u8; 1 << 16];
         let mut done = 0u64;
         loop {
@@ -143,7 +166,7 @@ pub fn download(url: &str, dest: &Path, progress: Progress) -> Result<()> {
             if n == 0 {
                 break;
             }
-            f.write_all(&buf[..n as usize])?;
+            sink(&buf[..n as usize])?;
             done += n as u64;
             progress(done, total);
         }
@@ -204,6 +227,29 @@ pub fn run_elevated(exe: &Path, args: &str) -> Result<u32> {
         let _ = CloseHandle(info.hProcess);
         Ok(code)
     }
+}
+
+/// Start a program elevated (UAC prompt) without waiting for it; Err when
+/// the user declines.
+pub fn start_elevated(exe: &Path, args: &str) -> Result<()> {
+    let file = HSTRING::from(exe.as_os_str());
+    let params = HSTRING::from(args);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: w!("runas"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: PCWSTR(params.as_ptr()),
+        nShow: 1, // SW_SHOWNORMAL
+        ..Default::default()
+    };
+    unsafe {
+        ShellExecuteExW(&mut info).map_err(|_| anyhow!("没有获得管理员权限"))?;
+        if !info.hProcess.is_invalid() {
+            let _ = CloseHandle(info.hProcess);
+        }
+    }
+    Ok(())
 }
 
 /// Windows Installer / setup exit codes that mean success (3010 = reboot required).

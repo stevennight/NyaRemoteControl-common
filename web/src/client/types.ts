@@ -1,4 +1,5 @@
-// Shapes exchanged with nya-client (client/src/webui.rs).
+// Shapes exchanged with nya-client (client/src/app/launcher.rs).
+import type { UpdateInfo } from '../lib/UpdateCard.svelte';
 
 export type Defaults = {
   mode: string; // office | game
@@ -50,6 +51,9 @@ export type ClientState = {
   /** Set on this computer ('' = the computer name). */
   client_name: string;
   computer_name: string;
+  /** Look for a new version at start. */
+  check_updates: boolean;
+  update: UpdateInfo;
   /** Hardware decoding summary of this computer. */
   decode: string;
   hosts: Host[];

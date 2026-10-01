@@ -1,4 +1,5 @@
 // Shapes exchanged with nya-server.exe (server/manager/src/gui.rs).
+import type { UpdateInfo } from '../lib/UpdateCard.svelte';
 
 export type Config = {
   port: number;
@@ -10,6 +11,8 @@ export type Config = {
   max_fps: number;
   audio: boolean;
   log_level: string;
+  /** Look for new versions (installing is always the user's choice). */
+  check_updates: boolean;
 };
 
 export type Event = { unix: number; kind: string; text: string };
@@ -42,6 +45,8 @@ export type Snapshot = {
   load_error: string | null;
   busy: string | null;
   log_dir: string;
+  /** From the service (it checks itself), or from this program's own check. */
+  update: UpdateInfo | null;
 };
 
 export type Component = {
