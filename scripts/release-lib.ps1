@@ -123,6 +123,27 @@ function New-NyaReleaseFiles {
     Get-ChildItem -LiteralPath $out | ForEach-Object { "  $($_.Name)  ($([math]::Round($_.Length / 1MB, 1)) MB)" }
 }
 
+# The protocol version common speaks must be frozen (design doc §6.4) before a
+# release ships it: proto/history/vX.Y/nya.proto equal to the current schema,
+# plus the compat fixtures for vX.Y.
+function Test-NyaProtoFrozen([string]$Common) {
+    $crate = Join-Path $Common 'crates\nya-proto'
+    $lib = Get-Content -LiteralPath (Join-Path $crate 'src\lib.rs') -Raw
+    if ($lib -notmatch 'PROTO_MAJOR: u32 = (\d+);' ) { throw 'PROTO_MAJOR not found in nya-proto' }
+    $major = $Matches[1]
+    if ($lib -notmatch 'PROTO_MINOR: u32 = (\d+);' ) { throw 'PROTO_MINOR not found in nya-proto' }
+    $v = "v$major.$($Matches[1])"
+    $frozen = Join-Path $crate "proto\history\$v\nya.proto"
+    $howTo = "copy crates\nya-proto\proto\nya.proto to proto\history\$v\ and run NYA_BLESS=1 cargo test -p nya-proto --test compat in common, then commit"
+    if (-not (Test-Path -LiteralPath $frozen) -or -not (Test-Path -LiteralPath (Join-Path $crate "tests\compat\$v"))) {
+        throw "protocol $v is not frozen yet: $howTo"
+    }
+    $norm = { param($p) (Get-Content -LiteralPath $p -Raw) -replace "`r`n", "`n" }
+    if ((& $norm $frozen) -ne (& $norm (Join-Path $crate 'proto\nya.proto'))) {
+        throw "nya.proto differs from the frozen proto\history\$v. If $v was already released, bump PROTO_MINOR for the new fields; otherwise re-freeze: $howTo"
+    }
+}
+
 # Bump VERSION and the Cargo.toml versions, pin the common commit
 # (COMMON_REF, used by the release build), commit and tag v<Version>.
 function Publish-NyaVersion {
@@ -134,6 +155,7 @@ function Publish-NyaVersion {
         if (git status --porcelain --untracked-files=no) { throw "$Product has uncommitted changes; commit them first" }
         if (git tag --list "v$Version") { throw "tag v$Version already exists" }
         if (git -C $common status --porcelain --untracked-files=no) { throw 'common has uncommitted changes; commit and push them first' }
+        Test-NyaProtoFrozen $common
         $commonSha = (git -C $common rev-parse HEAD).Trim()
         Invoke-Checked git @('-C', $common, 'fetch', '--quiet', 'origin')
         if (-not (git -C $common branch -r --contains $commonSha)) { throw "common $commonSha is not pushed; push common first (the release build checks it out)" }

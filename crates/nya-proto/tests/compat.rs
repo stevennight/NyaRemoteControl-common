@@ -43,7 +43,13 @@ fn samples() -> Vec<(&'static str, Vec<u8>)> {
                 ..Default::default()
             }),
             encoder_preference: "auto".into(),
-            ..Default::default()
+            // Since 1.2; older fixtures simply lack these fields.
+            display_setup: Some(pb::DisplaySetup {
+                virtual_screens: vec![pb::VirtualScreen { width: 2560, height: 1440, refresh_hz: 60, scale_percent: 150 }],
+                physical_off: true,
+                block_local_input: true,
+            }),
+            slot: 1,
         })),
     };
     let key = pb::InputMsg {
