@@ -4,7 +4,7 @@
   import Icon from '../lib/Icon.svelte';
   import { call, errorText } from '../lib/ipc';
   import { toast } from '../lib/notify.svelte';
-  import type { ClientState, Defaults } from './types';
+  import type { ClientState, Defaults, SharedFolder } from './types';
 
   let { cs, scope = $bindable(), onsaved }: { cs: ClientState; scope: string | null; onsaved: (s: ClientState) => void } = $props();
 
@@ -74,6 +74,20 @@
     ['datagram', '数据报 + 纠错', '丢包时靠纠错数据恢复，恢复不了就跳过这一帧，不卡顿；多占约 10–50% 带宽'],
   ];
   const transportHelp = $derived(transports.find((p) => p[0] === d.video_transport)?.[2] ?? '');
+
+  async function addFolder() {
+    try {
+      const f = await call<{ path: string; name: string } | null>('pick_folder');
+      if (!f) return;
+      if (d.shared_folders.some((x) => x.path.toLowerCase() === f.path.toLowerCase())) {
+        toast('这个文件夹已经在列表里了', 'info');
+        return;
+      }
+      d.shared_folders.push({ path: f.path, name: f.name, read_only: false } satisfies SharedFolder);
+    } catch (e) {
+      toast(errorText(e), 'error');
+    }
+  }
 
   async function save() {
     saving = true;
@@ -230,6 +244,30 @@
   </div>
 
   <div class="card group">
+    <h3>共享文件夹</h3>
+    <p class="hint">连接后这些文件夹出现在被控端的一个盘符里（例如 Z:），被控端的程序可以直接打开、保存。被控端需要在管理程序“可选组件”里安装“文件夹挂载”。</p>
+    {#each d.shared_folders as f, i (f.path)}
+      <div class="field">
+        <div class="text">
+          <input class="input sm fname" bind:value={f.name} aria-label="在被控端显示的名称" />
+          <span class="path" title={f.path}>{f.path}</span>
+        </div>
+        <div class="ctl">
+          <span class="muted small">只读</span>
+          <Switch bind:checked={f.read_only} label="只读" />
+          <button class="btn ghost icon" title="不再共享" aria-label="不再共享" onclick={() => d.shared_folders.splice(i, 1)}><Icon name="x" /></button>
+        </div>
+      </div>
+    {:else}
+      <div class="field"><div class="text"><span>还没有共享文件夹</span></div></div>
+    {/each}
+    <div class="field">
+      <div class="text"></div>
+      <button class="btn" onclick={addFolder}><Icon name="plus" />添加文件夹…</button>
+    </div>
+  </div>
+
+  <div class="card group">
     <h3>高级</h3>
     <div class="field">
       <div class="text"><b>编码格式</b></div>
@@ -273,6 +311,9 @@
   .mini i.v { border-color: var(--accent); background: var(--accent-soft); }
   .mini i.off { border-style: dashed; opacity: 0.45; }
   .num { width: 92px; }
+  .hint { color: var(--text-3); font-size: 12.5px; margin: -4px 18px 6px; }
+  .fname { width: 200px; font-weight: 600; }
+  .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
   .scope { margin-left: auto; max-width: 280px; }
   .scope-note { color: var(--text-3); font-size: 13px; margin: -8px 0 16px; }
   .link { border: 0; background: none; color: var(--accent-text); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }

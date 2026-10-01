@@ -53,6 +53,7 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::MultiStream,
         Feature::MultiClient,
         Feature::VideoDatagram,
+        Feature::FolderMount,
     ]
     .into_iter()
     .map(|f| f as u32)

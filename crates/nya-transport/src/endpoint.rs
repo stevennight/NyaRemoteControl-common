@@ -17,7 +17,8 @@ pub fn transport_config() -> TransportConfig {
     // Overlay networks (Tailscale etc.) often have an MTU of 1280.
     t.initial_mtu(1200);
     t.max_concurrent_uni_streams(VarInt::from_u32(64));
-    t.max_concurrent_bidi_streams(VarInt::from_u32(8));
+    // USB tunnels and folder requests (one stream each, several at once).
+    t.max_concurrent_bidi_streams(VarInt::from_u32(128));
     // Large enough for 4K keyframes, small enough to keep queueing latency down.
     t.stream_receive_window(VarInt::from_u32(16 << 20));
     t.receive_window(VarInt::from_u32(32 << 20));

@@ -17,6 +17,8 @@ pub mod stream_type {
     pub const FILE: u64 = 4;
     /// Bidi TCP tunnel opened by the host (USB/IP): varint port, then raw bytes.
     pub const TUNNEL: u64 = 5;
+    /// Bidi, opened by the host (FEATURE_FOLDER_MOUNT): one FsRequest, one FsReply.
+    pub const FS: u64 = 6;
 }
 
 /// Datagram types (first byte).

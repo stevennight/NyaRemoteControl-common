@@ -21,6 +21,7 @@ const state: ClientState = {
     max_fps: 0, encoder: 'auto', codec: 'auto', chroma: 'auto', audio: true, clipboard: true, hw_decode: true,
     vd_count: 1, physical_off: false, block_input: false, vd_size: 'window', vd_width: 1920, vd_height: 1080, vd_scale: true, multi_window: false,
     mic: false, grab_keyboard: false,
+    shared_folders: [{ path: 'D:\\工作\\项目资料', name: '项目资料', read_only: false }],
   },
 };
 
@@ -102,6 +103,9 @@ export const mock: Mock = async (cmd, args, emit) => {
       return '== NyaRemoteControl 客户端诊断 ==\n版本 0.2.0\n\n[0] Red Hat QXL controller vendor=1b36\n    显示器 \\\\.\\DISPLAY1 1920x1080 60Hz\n    硬件解码：[]\n\n音频输出：OK';
     case 'open_logs':
       return null;
+    case 'pick_folder':
+      await wait(300);
+      return { path: 'C:\\Users\\me\\Downloads', name: 'Downloads' };
   }
   throw new Error(`未知命令 ${cmd}`);
 };

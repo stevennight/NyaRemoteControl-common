@@ -18,9 +18,9 @@
 | 静止细化：静止 150 ms 后补一帧低 QP 帧 | 静止 60 ms 后补发 4 帧（§3.2） | 实现时调整 |
 | 音频抖动缓冲：固定 30 ms，水位过高丢样本 | 自适应 20–80 ms，时钟漂移用 ±0.5 % 微调播放速度消除（§5） | 原做法延迟会在 30–120 ms 之间来回跳 |
 | 统计浮层只有中位数 | 中位数 + 最近 10 秒的 P99，外加声音缓冲状态（§8） | 卡顿体现在 P99 |
-| 客户端界面：winit 窗口 + 浮层 | 主界面是 WebView2 中的 Svelte 页面，远程画面在单独窗口，会话工具条为 egui（§14.6） | egui 界面局促、样式陈旧；网页更容易做出 UU / 向日葵那样的外观 |
+| 客户端界面：winit 窗口 + 浮层 | 主界面是 WebView2 中的 Svelte 页面，远程画面在单独窗口，会话工具条为 egui（§14.7） | egui 界面局促、样式陈旧；网页更容易做出 UU / 向日葵那样的外观 |
 | 第二、三阶段的码率自适应、多显示器、文件传输、剪贴板图片 / 文件、麦克风、USB、手柄、AMF | 均已实现（§12） | |
-| （没有） | 安装包、CI、GitHub Releases 发布、带回滚的自动更新（§14.7） | 被控端在远处，更新失败不能失联 |
+| （没有） | 安装包、CI、GitHub Releases 发布、带回滚的自动更新（§14.8） | 被控端在远处，更新失败不能失联 |
 
 ---
 
@@ -319,7 +319,7 @@ helper 启动时（以及拓扑变化时）：
 - **防止按键卡住**：helper 记录当前按下的键；断线、helper 重启、客户端失焦时，全部补发"抬起"。
 - **桌面切换**：注入前检查 `OpenInputDesktop`，桌面变化时（Default ↔ Winlogon）调用 `SetThreadDesktop` 切换；同时重建 DXGI 复制对象（会收到 `DXGI_ERROR_ACCESS_LOST`）。
 - 客户端系统快捷键（Win、Alt+Tab 等）：捕获键盘时通过低级键盘钩子拦截并转发；热键 `Ctrl+Alt+Shift+Q` 捕获 / 释放键盘。云电脑里低级钩子收不到按键（输入全部是注入的），所以同时从窗口的键盘事件转发。
-- 手柄：客户端读取 XInput 手柄，经输入流发送；被控端通过 ViGEmBus 创建虚拟 Xbox 360 手柄并回传震动（§14.5）。
+- 手柄：客户端读取 XInput 手柄，经输入流发送；被控端通过 ViGEmBus 创建虚拟 Xbox 360 手柄并回传震动（§14.6）。
 
 ---
 
@@ -514,7 +514,7 @@ u16 reserved
 | 1.1 | 文件传输、剪贴板图片、麦克风、USB 透传、手柄、码率策略、`ServerStats.target_kbps` | 已发布、已冻结 |
 | 1.2 | 虚拟显示器 / 隐私屏（`DisplaySetup`）、剪贴板文件、多画面（`slot`）、多客户端（`SessionRole` / `TakeControl`）、HDR 标记 | 已发布（server / client 0.2.0、0.3.0）、已冻结 |
 | 1.3 | `ServerStats.encode_ms_p99` | 已发布（server / client 0.4.0）、已冻结 |
-| 1.4 | 视频数据报 + 纠错（`FEATURE_VIDEO_DATAGRAM`、`StreamConfig.video_transport`、`ClientStats` 分片统计、`ServerStats.fec_percent`） | 开发中，发布时冻结 |
+| 1.4 | 视频数据报 + 纠错（`FEATURE_VIDEO_DATAGRAM`、`StreamConfig.video_transport`、`ClientStats` 分片统计、`ServerStats.fec_percent`）；文件夹挂载（`FEATURE_FOLDER_MOUNT`、`SharedFolders` / `FolderMountStatus`、FS 流与 `FsRequest` / `FsReply`） | 开发中，发布时冻结 |
 
 **兼容性测试**
 - 每次发布，把 `.proto` 冻结一份到 `nya-proto/proto/history/vX.Y/`，并用 `NYA_BLESS=1 cargo test -p nya-proto --test compat` 生成 `tests/compat/vX.Y/`。发版脚本（`release-lib.ps1` 的 `Test-NyaProtoFrozen`）会检查当前协议版本已冻结且与冻结的 `.proto` 一致，否则拒绝发版。
@@ -610,7 +610,8 @@ u16 reserved
 | R8 | 系统快捷键拦截与输入法交互 | M2 实测 |
 | R9 | 虚拟显示器驱动（MttVDD）模式过多时显示器无法接入（约 100 个模式以上 `IddCxMonitorArrival` 失败） | 已规避：只写 60 Hz + 客户端刷新率，最多 64 个模式；排查用 `nya-server-svc vdd-test --driver-log` |
 | R10 | 剪贴板文件：被控端资源管理器（普通用户）回调 SYSTEM 身份 helper 的 OLE 数据对象 | 依赖 `CoInitializeSecurity` 放开交互用户调用；被控端粘贴失败时先查这里 |
-| R11 | 自动更新后服务没有恢复，被控端失联 | 独立更新程序：备份 → 安装 → 等新服务应答 → 失败则回滚，最后总是确保服务在运行（§14.7）；需实机演练 |
+| R11 | 自动更新后服务没有恢复，被控端失联 | 独立更新程序：备份 → 安装 → 等新服务应答 → 失败则回滚，最后总是确保服务在运行（§14.8）；需实机演练 |
+| R12 | 文件夹挂载：WinFsp FUSE 接口是按其头文件手写的绑定（结构布局有单元测试核对），开发机没装 WinFsp，挂载本身未实测 | 实机安装 WinFsp 后验证；失败时查服务日志里的 mount / folder request 记录 |
 
 ---
 
@@ -642,15 +643,15 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | 远端分辨率跟随客户端窗口（虚拟显示器） | ✅ 已实现，另有隐私屏（§14.1） |
 | 文件拖拽传输、剪贴板图片 / 文件 | ✅ 已实现（§14.4） |
 | 跨 GPU 传输 T2（D3D12 跨适配器共享） | ⏸ 未做；只在 T1 实测不满意时再做 |
-| 文件夹挂载（WinFsp） | ⏸ 未做；剪贴板文件已覆盖大部分传文件需求，挂载只在被控端程序需要直接打开本机文件时才需要 |
+| 文件夹挂载（WinFsp） | ✅ 已实现（§14.5） |
 
 **第三阶段：接近云电脑**
 
 | 项目 | 状态 |
 |---|---|
 | 麦克风（VB-Cable） | ✅ 已实现（§5） |
-| USB 重定向（usbip-win2） | ✅ 已实现（§14.5） |
-| 手柄（ViGEmBus） | ✅ 已实现（§14.5） |
+| USB 重定向（usbip-win2） | ✅ 已实现（§14.6） |
+| 手柄（ViGEmBus） | ✅ 已实现（§14.6） |
 | AMD AMF 编码 | ✅ 已接入（按显卡厂商选择，未在 AMD 显卡上实测） |
 | Android 客户端 | ⏸ 未开始 |
 | 打印（虚拟 PDF 打印机回传） | ⏸ 未做；USB 打印机可走 USB 透传 |
@@ -677,6 +678,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | | 多窗口、多客户端观看 / 接管、客户端同时连多台 |
 | | 麦克风、手柄、USB 透传 |
 | | 视频数据报 + 纠错（游戏模式默认，§6.5） |
+| | 文件夹挂载（WinFsp 驱动加载、盘符出现在用户会话、资源管理器读写、大文件速度） |
 | | 管理程序 + 控制管道（服务模式下的管道权限） |
 | | 安装包升级、自动更新与回滚（R11；0.2.0 安装的被控端没有更新程序，第一次需手动升级） |
 | | QSV、AMF、跨显卡传输（需要对应硬件） |
@@ -716,17 +718,25 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 - 剪贴板文字、图片双向自动同步。
 - 剪贴板文件（`FEATURE_CLIPBOARD_FILES`，含文件夹）：复制时只发送文件列表（`FileOffer`），在另一边放一个 OLE 虚拟 `CF_HDROP` 数据对象；真正粘贴时才通过文件流拉取到粘贴缓存（客户端 `%LOCALAPPDATA%\NyaRemoteControl\clipboard`，一天后清理），再交给资源管理器复制。连接断开后对方复制的文件不能再粘贴。
 
-### 14.5 外设与可选组件
-- 可选组件（虚拟显示器、VB-Cable、ViGEmBus、usbip-win2；客户端侧 usbipd-win）由管理界面 / 客户端一键安装：下载地址和 SHA-256 固定，走系统代理，也可以使用随安装包附带的 `drivers` 离线目录。
+### 14.5 文件夹挂载（WinFsp）
+- `FEATURE_FOLDER_MOUNT`：客户端在设置里选要共享的文件夹（可设只读），连接后发 `SharedFolders`；被控端用 WinFsp（可选组件，签名驱动）的 FUSE 接口挂到一个空闲盘符（从 Z: 往前找），每个共享文件夹是盘根下的一个目录，结果用 `FolderMountStatus` 告诉客户端。
+- 每个文件系统调用 = 被控端打开一条 FS 双向流，写一个 `FsRequest`，读一个 `FsReply`（`nya-transport::folders`）。请求无状态（每次带路径，不保持打开的句柄），连接断开不会在客户端留下东西。单次读写最多 512 KiB；WinFsp 缓存文件和目录信息 1 秒，资源管理器浏览不会每步都等网络。
+- 安全：客户端只回答共享文件夹之内的路径（拒绝 `..`、盘符、反斜杠），只读文件夹拒绝一切修改，共享文件夹本身不能被删除或改名；跨共享文件夹的移动被拒绝（资源管理器会改用复制 + 删除）。
+- 只有操作者的文件夹会挂载：观看者的请求被记下，接管操作时再挂；失去操作权、清空列表或断开时卸载。
+- 服务以 SYSTEM 运行，盘符在全局命名空间，登录用户能看到；文件权限给 Everyone（0777），是否允许修改由客户端决定。
+- WinFsp 在运行时按注册表里的安装目录加载 `winfsp-x64.dll`，没装时被控端照常工作，只是告诉客户端"没有安装 WinFsp"。
+
+### 14.6 外设与可选组件
+- 可选组件（虚拟显示器、VB-Cable、ViGEmBus、usbip-win2、WinFsp；客户端侧 usbipd-win）由管理界面 / 客户端一键安装：下载地址和 SHA-256 固定，走系统代理，也可以使用随安装包附带的 `drivers` 离线目录。
 - 手柄：XInput → `InputMsg.gamepad` → ViGEm 虚拟 Xbox 360 手柄，震动经 `GamepadRumble` 回传。
 - USB：客户端 usbipd-win 共享设备，被控端 usbip-win2 连接；USB/IP 的 TCP 流量经 QUIC 隧道流转发（§6.2），被控端在 127.0.0.1:3240 监听，代替客户端的 usbipd 让 usbip-win2 连接。
 
-### 14.6 界面
+### 14.7 界面
 - 客户端主界面（设备列表、连接设置、关于与诊断）和被控端管理界面（概览、已配对客户端、设置、可选组件、诊断、日志）都是 `common/web` 里的 Svelte 页面，由 `nya-webui` 用 WebView2 显示，通过 JSON 调用 / 事件与 Rust 通信。`npm run dev` 可在浏览器里用示例数据预览。
 - 远程画面在单独的会话窗口（D3D11 交换链），会话工具条和统计面板用 egui 绘制在上面。
 - 注意：创建 winit 窗口前不能在 UI 线程初始化多线程 COM，否则 winit 的 OleInitialize 失败。
 
-### 14.7 安装、发布与自动更新
+### 14.8 安装、发布与自动更新
 - 版本：server、client 各自的 `VERSION` 文件（语义化版本），和 Cargo.toml 保持一致；显示的版本带提交号。`scripts/release.ps1 x.y.z` 改版本、写 `COMMON_REF`、提交并打 tag；推送 tag 后 GitHub Actions 构建 NSIS 安装包、便携 zip 和 `.sha256` 并发布到 Releases（带后缀的为预发布）。发版前检查 common 已推送、协议已冻结（§6.4）。
 - 被控端更新：服务每 12 小时检查 GitHub Releases。确认更新后，服务下载安装包并核对 SHA-256，再启动独立于服务的更新程序（`%ProgramData%\NyaRemoteControl\update\nya-updater.exe`，即 `nya-server-svc.exe` 的副本，`apply-update` 子命令）：备份当前文件 → 静默安装 → 等待新版本服务在 120 秒内通过控制管道应答 → 不正常则恢复备份并重新注册服务 → 无论如何最后确保服务在运行。结果写入 `update\result.json`，服务下次启动时报告。
 - 客户端更新：启动时检查；更新时以管理员权限静默运行安装包后退出，安装完成后经 explorer.exe 以普通用户身份重新打开。便携版只打开发布页。

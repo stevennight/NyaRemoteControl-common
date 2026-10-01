@@ -75,6 +75,7 @@ enum Feature {
   FEATURE_MULTI_STREAM = 15;      // since 1.2: several displays at once, one stream per `slot`
   FEATURE_MULTI_CLIENT = 16;      // since 1.2: several clients at once; one operates, the others watch
   FEATURE_VIDEO_DATAGRAM = 17;    // since 1.4: video as datagrams with FEC (StreamConfig.video_transport)
+  FEATURE_FOLDER_MOUNT = 18;      // since 1.4: client folders as a drive on the host (SharedFolders, FS streams)
 }
 
 // ============================================================================
@@ -111,7 +112,97 @@ message ControlMsg {
     GamepadRumble gamepad_rumble = 26;  // since 1.1
     SessionRole session_role = 27;      // since 1.2 (MULTI_CLIENT)
     TakeControl take_control = 28;      // since 1.2 (MULTI_CLIENT)
+    SharedFolders shared_folders = 29;  // since 1.4 (FOLDER_MOUNT)
+    FolderMountStatus folder_mount_status = 30;  // since 1.4 (FOLDER_MOUNT)
   }
+}
+
+// Client -> host (FOLDER_MOUNT): folders of the client to show on the host as
+// one drive, each as a top-level directory. Sent again whenever the list
+// changes; an empty list unmounts. Only the operating client's list counts.
+message SharedFolders {
+  repeated SharedFolder folders = 1;
+}
+
+message SharedFolder {
+  string name = 1;        // directory name on the drive (unique, no '/' or '\')
+  bool read_only = 2;
+}
+
+// Host -> client (FOLDER_MOUNT): what became of SharedFolders.
+message FolderMountStatus {
+  bool mounted = 1;
+  string mount_point = 2;   // e.g. "Z:"
+  string message = 3;       // why not, or a note; shown as-is
+}
+
+// FS stream (bidi, type 6, opened by the host): one FsRequest, one FsReply.
+// Paths are '/'-separated and start at the drive root: "/" lists the shared
+// folders, "/<folder name>/a/b.txt" is a file inside one. The client serves
+// nothing outside the shared folders and refuses writes to read-only ones.
+message FsRequest {
+  string path = 1;
+  oneof op {
+    FsStat stat = 2;
+    FsList list = 3;
+    FsRead read = 4;
+    FsWrite write = 5;
+    FsCreate create = 6;
+    FsRemove remove = 7;
+    FsRename rename = 8;
+    FsTruncate truncate = 9;
+    FsSetTimes set_times = 10;
+    FsVolume volume = 11;
+  }
+}
+
+message FsStat {}
+message FsList {}
+message FsRead { uint64 offset = 1; uint32 len = 2; }      // len at most 512 KiB
+message FsWrite { uint64 offset = 1; bytes data = 2; }      // data at most 512 KiB
+message FsCreate { bool dir = 1; bool exclusive = 2; }      // exclusive: fail if it exists
+message FsRemove { bool dir = 1; }
+message FsRename { string to = 1; bool replace = 2; }
+message FsTruncate { uint64 size = 1; }
+message FsSetTimes { int64 mtime_us = 1; int64 atime_us = 2; }   // Unix µs; 0 = leave
+message FsVolume {}
+
+message FsAttr {
+  bool dir = 1;
+  uint64 size = 2;
+  int64 mtime_us = 3;     // Unix µs
+  int64 atime_us = 4;
+  int64 ctime_us = 5;     // creation
+  bool read_only = 6;
+  bool hidden = 7;
+}
+
+message FsEntry {
+  string name = 1;
+  FsAttr attr = 2;
+}
+
+enum FsError {
+  FS_OK = 0;
+  FS_NOT_FOUND = 1;
+  FS_EXISTS = 2;
+  FS_ACCESS = 3;          // denied, or a read-only folder
+  FS_NOT_EMPTY = 4;
+  FS_IS_DIR = 5;
+  FS_NOT_DIR = 6;
+  FS_INVALID = 7;
+  FS_NO_SPACE = 8;
+  FS_IO = 9;              // anything else
+}
+
+message FsReply {
+  FsError error = 1;
+  FsAttr attr = 2;               // stat, create
+  repeated FsEntry entries = 3;  // list
+  bytes data = 4;                // read (shorter at the end of the file)
+  uint32 written = 5;            // write
+  uint64 total_bytes = 6;        // volume
+  uint64 free_bytes = 7;
 }
 
 // Host -> client (MULTI_CLIENT): who operates the host. Sent after connecting

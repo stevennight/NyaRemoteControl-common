@@ -1,6 +1,8 @@
 // Shapes exchanged with nya-client (client/src/app/launcher.rs).
 import type { UpdateInfo } from '../lib/UpdateCard.svelte';
 
+export type SharedFolder = { path: string; name: string; read_only: boolean };
+
 export type Defaults = {
   mode: string; // office | game
   fullscreen: boolean;
@@ -29,6 +31,8 @@ export type Defaults = {
   mic: boolean;
   /** Keyboard captured after connecting. */
   grab_keyboard: boolean;
+  /** Folders shown on the host as a drive. */
+  shared_folders: SharedFolder[];
 };
 
 export type Host = {
