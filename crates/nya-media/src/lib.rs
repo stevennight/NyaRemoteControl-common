@@ -4,10 +4,12 @@
 //!   (NVENC / QSV / AMF) and a software H.264 fallback (OpenH264)
 //! * [`decoder`] – D3D11VA hardware decoding with software fallback
 //! * [`audio`] – Opus encoder / decoder (libopus)
+//! * [`jitter`] – adaptive jitter buffer with drift correction for received audio
 
 pub mod audio;
 pub mod decoder;
 pub mod encoder;
+pub mod jitter;
 mod ff;
 
 pub use ff::{check_runtime_versions, init_log_level, FfError};

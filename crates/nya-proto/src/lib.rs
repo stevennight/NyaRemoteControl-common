@@ -4,10 +4,12 @@
 //! * [`negotiate`] – version / feature negotiation
 //! * [`frame`] – binary video frame header, stream and datagram type tags
 //! * [`framing`] – length-delimited message I/O over async streams
+//! * [`stats`] – percentiles for reported statistics
 
 pub mod frame;
 pub mod framing;
 pub mod negotiate;
+pub mod stats;
 
 /// Generated Protobuf types (package `nya.v1`).
 pub mod pb {
@@ -16,7 +18,7 @@ pub mod pb {
 
 /// Current protocol version spoken by this build.
 pub const PROTO_MAJOR: u32 = 1;
-pub const PROTO_MINOR: u32 = 2;
+pub const PROTO_MINOR: u32 = 3;
 /// Oldest MAJOR this build can still speak.
 pub const MIN_PROTO_MAJOR: u32 = 1;
 
