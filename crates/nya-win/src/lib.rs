@@ -17,6 +17,7 @@ pub mod print;
 pub mod shell;
 pub mod topology;
 pub mod transfer;
+pub mod transfer12;
 pub mod update;
 
 pub use windows;

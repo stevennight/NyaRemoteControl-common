@@ -48,8 +48,10 @@ pub fn open_pdf(path: &Path) -> Result<PdfDocument> {
     Ok(PdfDocument::LoadFromFileAsync(&file)?.get().context("PDF 无法打开")?)
 }
 
-/// Render one page to `width` x `height` pixels, BGRA top-down.
-pub fn render_page(page: &PdfPage, width: u32, height: u32) -> Result<Vec<u8>> {
+/// Render one page about `width` x `height` pixels, BGRA top-down. The size
+/// is in DIPs: on a scaled display the bitmap comes out larger, so the real
+/// size is returned with the pixels.
+pub fn render_page(page: &PdfPage, width: u32, height: u32) -> Result<(Vec<u8>, u32, u32)> {
     let opts = PdfPageRenderOptions::new()?;
     opts.SetDestinationWidth(width)?;
     opts.SetDestinationHeight(height)?;
@@ -57,6 +59,7 @@ pub fn render_page(page: &PdfPage, width: u32, height: u32) -> Result<Vec<u8>> {
     page.RenderWithOptionsToStreamAsync(&stream, &opts)?.get()?;
     stream.Seek(0)?;
     let decoder = BitmapDecoder::CreateAsync(&stream)?.get()?;
+    let (w, h) = (decoder.PixelWidth()?, decoder.PixelHeight()?);
     let data = decoder
         .GetPixelDataTransformedAsync(
             BitmapPixelFormat::Bgra8,
@@ -68,10 +71,10 @@ pub fn render_page(page: &PdfPage, width: u32, height: u32) -> Result<Vec<u8>> {
         .get()?
         .DetachPixelData()?;
     let px = data.to_vec();
-    if px.len() != width as usize * height as usize * 4 {
-        bail!("rendered {} bytes for {width}x{height}", px.len());
+    if px.len() != w as usize * h as usize * 4 {
+        bail!("rendered {} bytes for {w}x{h}", px.len());
     }
-    Ok(px)
+    Ok((px, w, h))
 }
 
 /// Where a page of `page_w` x `page_h` (any unit) goes in a printable area of
@@ -113,7 +116,7 @@ pub fn print_pdf(path: &Path, title: &str, printer: Option<&str>) -> Result<(Str
                 // Render no sharper than the printer, nor than MAX_DPI.
                 let render_scale = (MAX_DPI / dpi_x.max(1.0)).min(1.0);
                 let (rw, rh) = (((w as f64) * render_scale).round().max(1.0) as u32, ((h as f64) * render_scale).round().max(1.0) as u32);
-                let bgra = render_page(&page, rw, rh)?;
+                let (bgra, rw, rh) = render_page(&page, rw, rh)?;
                 let bgr = to_bgr24(&bgra, rw as usize, rh as usize);
                 let bmi = BITMAPINFO {
                     bmiHeader: BITMAPINFOHEADER {
@@ -192,12 +195,14 @@ mod tests {
         let page = doc.GetPage(0).unwrap();
         let size = page.Size().unwrap();
         assert!((size.Width - 200.0 * 96.0 / 72.0).abs() < 1.0, "{}", size.Width);
-        let px = render_page(&page, 400, 200).unwrap();
-        // PDF y grows upwards: the box covers x 20..220, y 100..180 in pixels.
-        let at = |x: usize, y: usize| px[(y * 400 + x) * 4];
-        assert!(at(100, 140) < 40, "inside the box is black");
-        assert!(at(300, 140) > 215, "outside is white");
-        assert!(at(100, 40) > 215, "above the box is white");
+        let (px, w, h) = render_page(&page, 400, 200).unwrap();
+        // Larger on a scaled display, same aspect ratio.
+        assert!(w >= 400 && (w as f64 / h as f64 - 2.0).abs() < 0.02, "{w}x{h}");
+        // PDF y grows upwards: the box covers 10%..55% across, 20%..70% from the top.
+        let at = |fx: f64, fy: f64| px[((fy * h as f64) as usize * w as usize + (fx * w as f64) as usize) * 4];
+        assert!(at(0.25, 0.7) < 40, "inside the box is black");
+        assert!(at(0.75, 0.7) > 215, "outside is white");
+        assert!(at(0.25, 0.2) > 215, "above the box is white");
         let _ = std::fs::remove_file(path);
     }
 
