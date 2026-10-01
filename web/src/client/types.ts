@@ -23,6 +23,10 @@ export type Defaults = {
   vd_scale: boolean;
   /** Every host display in its own window. */
   multi_window: boolean;
+  /** Microphone on after connecting. */
+  mic: boolean;
+  /** Keyboard captured after connecting. */
+  grab_keyboard: boolean;
 };
 
 export type Host = {
@@ -31,11 +35,21 @@ export type Host = {
   paired: boolean;
   /** Unix seconds, 0 = never. */
   last_connected: number;
+  /** The name the host gives itself ('' until connected). */
+  server_name: string;
+  /** Named on this computer (otherwise follows server_name). */
+  custom_name: boolean;
+  /** Own connection settings; null = the defaults. */
+  settings: Defaults | null;
 };
 
 export type ClientState = {
   version: string;
+  /** This computer's name as hosts show it. */
   computer: string;
+  /** Set on this computer ('' = the computer name). */
+  client_name: string;
+  computer_name: string;
   /** Hardware decoding summary of this computer. */
   decode: string;
   hosts: Host[];

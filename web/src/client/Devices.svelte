@@ -10,7 +10,8 @@
     onadd,
     onrename,
     ondelete,
-  }: { cs: ClientState; onadd: () => void; onrename: (h: Host) => void; ondelete: (h: Host) => void } = $props();
+    onsettings,
+  }: { cs: ClientState; onadd: () => void; onrename: (h: Host) => void; ondelete: (h: Host) => void; onsettings: (h: Host) => void } = $props();
 
   let address = $state('');
 
@@ -49,23 +50,25 @@
 <div class="grid">
   {#each cs.hosts as h (h.address)}
     <div class="card dev">
-      <button class="thumb" style:--h={hue(h.name)} onclick={() => connect(h.address, h.name)} aria-label="连接 {h.name}">
+      <button class="thumb" style:--h={hue(h.name)} onclick={() => connect(h.address)} aria-label="连接 {h.name}">
         <span class="initial">{h.name.slice(0, 1).toUpperCase()}</span>
         <span class="go"><Icon name="play" size={16} />连接</span>
       </button>
       <div class="info">
-        <div class="name" title={h.name}>{h.name}</div>
+        <div class="name" title={h.custom_name && h.server_name && h.server_name !== h.name ? `被控端名称：${h.server_name}` : h.name}>{h.name}</div>
         <div class="meta">
           <span class="mono addr" title={h.address}>{h.address}</span>
           {#if h.paired}<span class="chip ok">已配对</span>{:else}<span class="chip warn">未配对</span>{/if}
+          {#if h.settings}<span class="chip" title="这台设备使用单独的连接设置">单独设置</span>{/if}
         </div>
         <div class="meta">{h.paired ? `上次连接：${ago(h.last_connected)}` : '第一次连接需要配对码'}</div>
       </div>
       <div class="actions">
-        <button class="btn primary" onclick={() => connect(h.address, h.name)}>连接</button>
+        <button class="btn primary" onclick={() => connect(h.address)}>连接</button>
         <Menu
           up
           items={[
+            { label: '连接设置', icon: 'sliders', onclick: () => onsettings(h) },
             { label: '改名', icon: 'edit', onclick: () => onrename(h) },
             { label: '复制地址', icon: 'copy', onclick: () => copy(h.address) },
             { label: '删除', icon: 'trash', danger: true, onclick: () => ondelete(h) },

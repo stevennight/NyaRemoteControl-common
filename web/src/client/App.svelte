@@ -14,6 +14,8 @@
   let page = $state<'devices' | 'settings' | 'about'>('devices');
   let phase = $state<Phase>({ phase: 'idle' });
   let local = $state<Local>(null);
+  /** Host whose settings the settings page edits; null = the defaults. */
+  let scope = $state<string | null>(null);
 
   $effect(() => {
     call<ClientState>('state').then((s) => (cs = s)).catch((e) => (loadError = errorText(e)));
@@ -36,7 +38,7 @@
   <nav class="side">
     <div class="brand"><span class="logo">N</span><span class="name">NyaRemoteControl<small>远程桌面</small></span></div>
     {#each nav as n (n.id)}
-      <button class="nav" class:on={page === n.id} onclick={() => (page = n.id)}><Icon name={n.icon} /><span class="label">{n.label}</span></button>
+      <button class="nav" class:on={page === n.id} onclick={() => ((page = n.id), n.id === 'settings' && (scope = null))}><Icon name={n.icon} /><span class="label">{n.label}</span></button>
     {/each}
     <div class="grow"></div>
     {#if cs}<div class="me"><b>本机 {cs.computer}</b>{cs.decode}</div>{/if}
@@ -44,11 +46,19 @@
   <main class="main">
     {#if cs}
       {#if page === 'devices'}
-        <Devices {cs} onadd={() => (local = { kind: 'add' })} onrename={(h) => (local = { kind: 'rename', host: h })} ondelete={(h) => (local = { kind: 'delete', host: h })} />
+        <Devices
+          {cs}
+          onadd={() => (local = { kind: 'add' })}
+          onrename={(h) => (local = { kind: 'rename', host: h })}
+          ondelete={(h) => (local = { kind: 'delete', host: h })}
+          onsettings={(h) => ((scope = h.address), (page = 'settings'))}
+        />
       {:else if page === 'settings'}
-        <Settings {cs} onsaved={(s) => (cs = s)} />
+        {#key scope}
+          <Settings {cs} bind:scope onsaved={(s) => (cs = s)} />
+        {/key}
       {:else}
-        <About {cs} />
+        <About {cs} onsaved={(s) => (cs = s)} />
       {/if}
     {:else if loadError}
       <div class="banner err"><Icon name="alert" />{loadError}</div>

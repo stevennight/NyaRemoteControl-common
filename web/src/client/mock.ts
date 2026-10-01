@@ -6,16 +6,19 @@ const now = Math.floor(Date.now() / 1000);
 const state: ClientState = {
   version: '0.2.0 (预览)',
   computer: 'DESKTOP-DEV',
+  client_name: '',
+  computer_name: 'DESKTOP-DEV',
   decode: '硬件解码：不可用（软件解码）',
   hosts: [
-    { name: '公司台式机', address: 'frp.dev.nyatori.com', paired: true, last_connected: now - 600 },
-    { name: '家里游戏机', address: '100.64.0.7', paired: true, last_connected: now - 3 * 86400 },
-    { name: '实验室笔记本', address: '100.64.0.12:47101', paired: false, last_connected: 0 },
+    { name: '公司台式机', address: 'frp.dev.nyatori.com', paired: true, last_connected: now - 600, server_name: 'DESKTOP-GTX1650', custom_name: true, settings: null },
+    { name: 'GAMING-PC', address: '100.64.0.7', paired: true, last_connected: now - 3 * 86400, server_name: 'GAMING-PC', custom_name: false, settings: null },
+    { name: '100.64.0.12:47101', address: '100.64.0.12:47101', paired: false, last_connected: 0, server_name: '', custom_name: false, settings: null },
   ],
   defaults: {
     mode: 'office', fullscreen: false, display: 0, bitrate_kbps: 0, unlimited_bitrate: false, bitrate_policy: 'auto',
     max_fps: 0, encoder: 'auto', codec: 'auto', chroma: 'auto', audio: true, clipboard: true, hw_decode: true,
     vd_count: 1, physical_off: false, block_input: false, vd_size: 'window', vd_width: 1920, vd_height: 1080, vd_scale: true, multi_window: false,
+    mic: false, grab_keyboard: false,
   },
 };
 
@@ -47,19 +50,31 @@ export const mock: Mock = async (cmd, args, emit) => {
       emit('connect', { phase: 'idle' });
       return null;
     case 'save_host':
-      state.hosts.push({ name: args.name || args.address, address: args.address, paired: false, last_connected: 0 });
+      state.hosts.push({ name: args.name || args.address, address: args.address, paired: false, last_connected: 0, server_name: '', custom_name: !!args.name, settings: null });
       return clone();
     case 'rename_host': {
-      if (!args.name) throw new Error('名称不能为空');
+      const h = state.hosts.find((h) => h.address === args.address)!;
+      if (!args.name) {
+        Object.assign(h, { name: h.server_name || h.address, custom_name: false });
+        return clone();
+      }
       if (state.hosts.some((h) => h.name === args.name && h.address !== args.address)) throw new Error('已有同名的被控端');
-      state.hosts.find((h) => h.address === args.address)!.name = args.name;
+      Object.assign(h, { name: args.name, custom_name: true });
       return clone();
     }
     case 'delete_host':
       state.hosts = state.hosts.filter((h) => h.address !== args.address);
       return clone();
     case 'save_defaults':
-      state.defaults = args.defaults;
+      if (args.address) state.hosts.find((h) => h.address === args.address)!.settings = args.defaults;
+      else state.defaults = args.defaults;
+      return clone();
+    case 'reset_host_settings':
+      state.hosts.find((h) => h.address === args.address)!.settings = null;
+      return clone();
+    case 'set_client_name':
+      state.client_name = args.name.trim();
+      state.computer = state.client_name || state.computer_name;
       return clone();
     case 'diag':
       await wait(600);

@@ -27,7 +27,7 @@
       address = '';
       name = '';
     } else if (local?.kind === 'rename') {
-      name = local.host.name;
+      name = local.host.custom_name ? local.host.name : '';
     }
   });
 
@@ -123,7 +123,7 @@
     <input id="addr" class="input" bind:value={address} placeholder="100.64.0.2 或 host:47100" spellcheck="false" use:autofocus />
     <div style="height: 12px"></div>
     <label class="lbl" for="nm">名称（可选）</label>
-    <input id="nm" class="input" bind:value={name} placeholder="例如：公司台式机" />
+    <input id="nm" class="input" bind:value={name} placeholder="不填则使用被控端自己设置的名称" />
     {#if error}<div class="err">{error}</div>{/if}
     {#snippet footer()}
       <button class="btn ghost" onclick={() => (local = null)}>取消</button>
@@ -135,12 +135,15 @@
   <Modal title="改名" onclose={() => (local = null)}>
     <p class="mono">{local.host.address}</p>
     <form onsubmit={rename}>
-      <input class="input" bind:value={name} aria-label="名称" use:autofocus />
+      <input class="input" bind:value={name} aria-label="名称" placeholder={local.host.server_name || local.host.address} use:autofocus />
     </form>
+    <p class="hint">
+      {#if local.host.server_name}被控端自己设置的名称是“{local.host.server_name}”。{/if}留空则使用被控端的名称{local.host.server_name ? '' : '（连接后获取）'}，被控端改名后这里也跟着变。
+    </p>
     {#if error}<div class="err">{error}</div>{/if}
     {#snippet footer()}
       <button class="btn ghost" onclick={() => (local = null)}>取消</button>
-      <button class="btn primary" onclick={() => rename(new SubmitEvent('submit'))} disabled={!name.trim()}>保存</button>
+      <button class="btn primary" onclick={() => rename(new SubmitEvent('submit'))}>保存</button>
     {/snippet}
   </Modal>
 {:else if local?.kind === 'delete'}
@@ -160,4 +163,5 @@
   .code { font-family: var(--mono); font-size: 16px; letter-spacing: 1px; text-transform: uppercase; }
   .fp { font-size: 18px; font-weight: 600; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); margin-bottom: 12px; word-break: break-all; }
   .err { color: var(--danger); font-size: 13px; margin-top: 10px; }
+  .hint { color: var(--text-3); font-size: 12.5px; margin: 10px 0 0; }
 </style>

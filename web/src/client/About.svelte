@@ -4,9 +4,27 @@
   import { toast } from '../lib/notify.svelte';
   import type { ClientState } from './types';
 
-  let { cs }: { cs: ClientState } = $props();
+  let { cs, onsaved }: { cs: ClientState; onsaved: (s: ClientState) => void } = $props();
   let report = $state('');
   let running = $state(false);
+  // svelte-ignore state_referenced_locally
+  let myName = $state(cs.client_name);
+  let savingName = $state(false);
+
+  async function saveName(e: SubmitEvent) {
+    e.preventDefault();
+    savingName = true;
+    try {
+      const s = await call<ClientState>('set_client_name', { name: myName.trim() });
+      onsaved(s);
+      myName = s.client_name;
+      toast('已保存，下次连接时被控端显示新名称', 'ok');
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      savingName = false;
+    }
+  }
 
   async function diag() {
     running = true;
@@ -26,7 +44,13 @@
   <div class="card group">
     <h3>本机</h3>
     <div class="field"><div class="text"><b>NyaRemoteControl 客户端</b><span>版本 {cs.version}</span></div></div>
-    <div class="field"><div class="text"><b>计算机名</b><span>被控端的“已配对客户端”里显示这个名字</span></div><span class="mono selectable">{cs.computer}</span></div>
+    <div class="field">
+      <div class="text"><b>本机名称</b><span>被控端的“已配对客户端”和连接记录里显示这个名字。留空则用计算机名 {cs.computer_name}</span></div>
+      <form class="ctl" onsubmit={saveName}>
+        <input class="input" bind:value={myName} placeholder={cs.computer_name} maxlength="64" aria-label="本机名称" />
+        <button class="btn" type="submit" disabled={savingName || myName.trim() === cs.client_name}>保存</button>
+      </form>
+    </div>
     <div class="field"><div class="text"><b>硬件解码</b><span>{cs.decode}</span></div></div>
   </div>
 

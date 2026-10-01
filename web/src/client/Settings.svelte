@@ -6,12 +6,21 @@
   import { toast } from '../lib/notify.svelte';
   import type { ClientState, Defaults } from './types';
 
-  let { cs, onsaved }: { cs: ClientState; onsaved: (s: ClientState) => void } = $props();
+  let { cs, scope = $bindable(), onsaved }: { cs: ClientState; scope: string | null; onsaved: (s: ClientState) => void } = $props();
 
+  // The page is re-created when `scope` changes (keyed in App).
+  // svelte-ignore state_referenced_locally
+  const host = scope === null ? null : (cs.hosts.find((h) => h.address === scope) ?? null);
+  // What is saved now: the host's own settings, or the defaults it falls back to.
+  const saved = $derived.by(() => {
+    const h = host && cs.hosts.find((x) => x.address === host.address);
+    return h?.settings ?? cs.defaults;
+  });
   // Edited copy, taken once when the page opens.
   // svelte-ignore state_referenced_locally
-  let d = $state<Defaults>(structuredClone($state.snapshot(cs.defaults)));
-  const dirty = $derived(JSON.stringify(d) !== JSON.stringify(cs.defaults));
+  let d = $state<Defaults>(structuredClone($state.snapshot(saved)));
+  const own = $derived(!!host && !!cs.hosts.find((x) => x.address === host.address)?.settings);
+  const dirty = $derived(JSON.stringify(d) !== JSON.stringify(saved));
   let saving = $state(false);
 
   // --- host display presets ---
@@ -63,7 +72,7 @@
   async function save() {
     saving = true;
     try {
-      const s = await call<ClientState>('save_defaults', { defaults: $state.snapshot(d) });
+      const s = await call<ClientState>('save_defaults', { defaults: $state.snapshot(d), address: host?.address ?? null });
       onsaved(s);
       toast('已保存，下次连接时生效', 'ok');
     } catch (e) {
@@ -73,14 +82,42 @@
     }
   }
 
+  async function useDefaults() {
+    if (!host) return;
+    try {
+      onsaved(await call<ClientState>('reset_host_settings', { address: host.address }));
+      d = structuredClone($state.snapshot(cs.defaults));
+      bitrateMode = d.unlimited_bitrate ? 'unlimited' : d.bitrate_kbps ? 'manual' : 'auto';
+      fpsMode = d.max_fps ? 'fixed' : 'auto';
+      toast(`“${host.name}”改为使用默认设置`, 'ok');
+    } catch (e) {
+      toast(errorText(e), 'error');
+    }
+  }
+
   function revert() {
-    d = structuredClone($state.snapshot(cs.defaults));
+    d = structuredClone($state.snapshot(saved));
     bitrateMode = d.unlimited_bitrate ? 'unlimited' : d.bitrate_kbps ? 'manual' : 'auto';
     fpsMode = d.max_fps ? 'fixed' : 'auto';
   }
 </script>
 
-<div class="head"><h2>连接设置</h2><span class="sub">对所有设备生效，下次连接时使用</span></div>
+<div class="head">
+  <h2>连接设置</h2>
+  <select class="input scope" bind:value={scope} aria-label="设置对象">
+    <option value={null}>默认设置（所有设备）</option>
+    {#each cs.hosts as h (h.address)}<option value={h.address}>{h.name}{h.settings ? '' : '（使用默认）'}</option>{/each}
+  </select>
+</div>
+<p class="scope-note">
+  {#if !host}
+    没有单独设置的设备使用这里的设置。连接后在工具条里改的模式、显示器、码率策略、麦克风、键盘捕获会记在那台设备的单独设置里。
+  {:else if own}
+    “{host.name}”使用单独的设置。<button class="link" onclick={useDefaults}>改回使用默认设置</button>
+  {:else}
+    “{host.name}”目前使用默认设置；在这里保存后改为单独设置，不影响其他设备。
+  {/if}
+</p>
 
 <div class="set">
   <div class="card group">
@@ -169,6 +206,14 @@
     <h3>声音与外设</h3>
     <div class="field"><div class="text"><b>播放被控端声音</b></div><Switch bind:checked={d.audio} label="播放被控端声音" /></div>
     <div class="field"><div class="text"><b>同步剪贴板</b><span>文字和图片自动同步</span></div><Switch bind:checked={d.clipboard} label="同步剪贴板" /></div>
+    <div class="field">
+      <div class="text"><b>连接后打开麦克风</b><span>把本机麦克风传给被控端（被控端需要安装“虚拟麦克风”组件）</span></div>
+      <Switch bind:checked={d.mic} label="连接后打开麦克风" />
+    </div>
+    <div class="field">
+      <div class="text"><b>连接后捕获键盘</b><span>Win 键等组合键发给被控端；随时可用 Ctrl+Alt+Shift+Q 切换</span></div>
+      <Switch bind:checked={d.grab_keyboard} label="连接后捕获键盘" />
+    </div>
     <div class="field"><div class="text"><b>连接后全屏</b></div><Switch bind:checked={d.fullscreen} label="连接后全屏" /></div>
   </div>
 
@@ -216,6 +261,9 @@
   .mini i.v { border-color: var(--accent); background: var(--accent-soft); }
   .mini i.off { border-style: dashed; opacity: 0.45; }
   .num { width: 92px; }
+  .scope { margin-left: auto; max-width: 280px; }
+  .scope-note { color: var(--text-3); font-size: 13px; margin: -8px 0 16px; }
+  .link { border: 0; background: none; color: var(--accent-text); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
   .savebar { position: sticky; bottom: -26px; display: flex; justify-content: flex-end; gap: 8px; padding: 14px 0 4px; background: linear-gradient(transparent, var(--bg) 35%); }
   @media (max-width: 720px) { .preset { grid-template-columns: 1fr; } }
 </style>
