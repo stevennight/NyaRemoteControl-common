@@ -241,6 +241,12 @@
       <Switch bind:checked={d.grab_keyboard} label="连接后捕获键盘" />
     </div>
     <div class="field"><div class="text"><b>连接后全屏</b></div><Switch bind:checked={d.fullscreen} label="连接后全屏" /></div>
+    <div class="field">
+      <div class="text"><b>被控端打印时</b><span>被控端选择“打印到 NyaRemoteControl 客户端”打印机时，内容以 PDF 发到本机（被控端需要安装“打印到客户端”组件）</span></div>
+      <select class="input" bind:value={d.print_mode} aria-label="被控端打印时">
+        <option value="print">用本机默认打印机打印</option><option value="open">打开 PDF</option><option value="save">只保存到下载文件夹</option>
+      </select>
+    </div>
   </div>
 
   <div class="card group">

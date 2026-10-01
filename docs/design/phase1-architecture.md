@@ -514,7 +514,7 @@ u16 reserved
 | 1.1 | 文件传输、剪贴板图片、麦克风、USB 透传、手柄、码率策略、`ServerStats.target_kbps` | 已发布、已冻结 |
 | 1.2 | 虚拟显示器 / 隐私屏（`DisplaySetup`）、剪贴板文件、多画面（`slot`）、多客户端（`SessionRole` / `TakeControl`）、HDR 标记 | 已发布（server / client 0.2.0、0.3.0）、已冻结 |
 | 1.3 | `ServerStats.encode_ms_p99` | 已发布（server / client 0.4.0）、已冻结 |
-| 1.4 | 视频数据报 + 纠错（`FEATURE_VIDEO_DATAGRAM`、`StreamConfig.video_transport`、`ClientStats` 分片统计、`ServerStats.fec_percent`）；文件夹挂载（`FEATURE_FOLDER_MOUNT`、`SharedFolders` / `FolderMountStatus`、FS 流与 `FsRequest` / `FsReply`） | 开发中，发布时冻结 |
+| 1.4 | 视频数据报 + 纠错（`FEATURE_VIDEO_DATAGRAM`、`StreamConfig.video_transport`、`ClientStats` 分片统计、`ServerStats.fec_percent`）；文件夹挂载（`FEATURE_FOLDER_MOUNT`、`SharedFolders` / `FolderMountStatus`、FS 流与 `FsRequest` / `FsReply`）；打印到客户端（`FEATURE_PRINT`、`FilePurpose.PRINT`） | 开发中，发布时冻结 |
 
 **兼容性测试**
 - 每次发布，把 `.proto` 冻结一份到 `nya-proto/proto/history/vX.Y/`，并用 `NYA_BLESS=1 cargo test -p nya-proto --test compat` 生成 `tests/compat/vX.Y/`。发版脚本（`release-lib.ps1` 的 `Test-NyaProtoFrozen`）会检查当前协议版本已冻结且与冻结的 `.proto` 一致，否则拒绝发版。
@@ -654,7 +654,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | 手柄（ViGEmBus） | ✅ 已实现（§14.6） |
 | AMD AMF 编码 | ✅ 已接入（按显卡厂商选择，未在 AMD 显卡上实测） |
 | Android 客户端 | ⏸ 未开始 |
-| 打印（虚拟 PDF 打印机回传） | ⏸ 未做；USB 打印机可走 USB 透传 |
+| 打印（虚拟 PDF 打印机回传） | ✅ 已实现（§14.6） |
 | 游戏模式弱网：视频走数据报 + FEC | ✅ 已实现（§6.5） |
 
 **其他待做**
@@ -679,6 +679,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | | 麦克风、手柄、USB 透传 |
 | | 视频数据报 + 纠错（游戏模式默认，§6.5） |
 | | 文件夹挂载（WinFsp 驱动加载、盘符出现在用户会话、资源管理器读写、大文件速度） |
+| | 打印到客户端（添加打印机、文件端口写入权限、客户端打印效果） |
 | | 管理程序 + 控制管道（服务模式下的管道权限） |
 | | 安装包升级、自动更新与回滚（R11；0.2.0 安装的被控端没有更新程序，第一次需手动升级） |
 | | QSV、AMF、跨显卡传输（需要对应硬件） |
@@ -727,8 +728,9 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 - WinFsp 在运行时按注册表里的安装目录加载 `winfsp-x64.dll`，没装时被控端照常工作，只是告诉客户端"没有安装 WinFsp"。
 
 ### 14.6 外设与可选组件
-- 可选组件（虚拟显示器、VB-Cable、ViGEmBus、usbip-win2、WinFsp；客户端侧 usbipd-win）由管理界面 / 客户端一键安装：下载地址和 SHA-256 固定，走系统代理，也可以使用随安装包附带的 `drivers` 离线目录。
+- 可选组件（虚拟显示器、VB-Cable、ViGEmBus、usbip-win2、WinFsp、打印到客户端；客户端侧 usbipd-win）由管理界面 / 客户端一键安装：下载地址和 SHA-256 固定，走系统代理，也可以使用随安装包附带的 `drivers` 离线目录。
 - 手柄：XInput → `InputMsg.gamepad` → ViGEm 虚拟 Xbox 360 手柄，震动经 `GamepadRumble` 回传。
+- 打印到客户端（`FEATURE_PRINT`）：可选组件"打印到客户端"用 Windows 自带的"Microsoft Print To PDF"驱动加一台打印机"打印到 NyaRemoteControl 客户端"，端口是数据目录下的文件 `print\job.pdf`（给 Users 修改权限，后台打印程序可能以打印用户的身份写入）。服务每秒检查一次：文件写完（大小非零、1.5 秒没变、能独占打开）就改名为"被控端打印 <本地时间>.pdf"，交给操作者的会话用文件流（`FilePurpose.PRINT`）发出，发完删除；没人接收的文件保留一天。客户端存到 `下载\NyaRemoteControl\打印`，按设置直接用默认打印机打印（Windows.Data.Pdf 逐页渲染，最高 300 dpi，GDI 按可打印区域等比居中）、打开 PDF 或只保存；打印失败时改为打开 PDF。只在服务模式下工作。
 - USB：客户端 usbipd-win 共享设备，被控端 usbip-win2 连接；USB/IP 的 TCP 流量经 QUIC 隧道流转发（§6.2），被控端在 127.0.0.1:3240 监听，代替客户端的 usbipd 让 usbip-win2 连接。
 
 ### 14.7 界面

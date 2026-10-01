@@ -13,6 +13,7 @@ pub mod duplication;
 pub mod input;
 pub mod input_block;
 pub mod package;
+pub mod print;
 pub mod shell;
 pub mod topology;
 pub mod transfer;

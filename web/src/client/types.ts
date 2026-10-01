@@ -33,6 +33,7 @@ export type Defaults = {
   grab_keyboard: boolean;
   /** Folders shown on the host as a drive. */
   shared_folders: SharedFolder[];
+  print_mode: string; // print | open | save
 };
 
 export type Host = {

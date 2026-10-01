@@ -44,6 +44,7 @@ const components: Component[] = [
   { id: 'vigem', name: '手柄', product: 'ViGEmBus 1.22.0', purpose: '客户端的手柄在被控端显示为 Xbox 手柄', status: '驱动已加载', installed: true, url: 'https://github.com/nefarius/ViGEmBus/releases', note: '免费；作者已停止维护，但仍可用' },
   { id: 'usbip', name: 'USB 透传', product: 'usbip-win2 0.9.8.1', purpose: 'U 盾、加密狗等 USB 设备从客户端透传到被控端', status: null, installed: false, url: 'https://github.com/vadimgrn/usbip-win2/releases', note: '客户端另需 usbipd-win' },
   { id: 'winfsp', name: '文件夹挂载', product: 'WinFsp 2025 (2.1)', purpose: '客户端共享的文件夹出现在被控端的一个盘符里，被控端的程序可以直接打开、保存客户端的文件', status: null, installed: false, url: 'https://github.com/winfsp/winfsp/releases', note: '免费开源（GPLv3，含开源软件例外）；客户端在“连接设置 → 共享文件夹”里选择文件夹' },
+  { id: 'printer', name: '打印到客户端', product: 'Windows 自带的 Microsoft Print to PDF', purpose: '被控端添加一台打印机“打印到 NyaRemoteControl 客户端”：打印的内容以 PDF 发给正在操作的客户端，用客户端的打印机打出来', status: null, installed: false, url: 'https://learn.microsoft.com/windows/client-management/', note: '不需要下载；需要服务模式。客户端可以选择直接打印、打开 PDF 或只保存' },
 ];
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));

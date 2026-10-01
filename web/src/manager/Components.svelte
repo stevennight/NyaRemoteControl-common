@@ -8,7 +8,7 @@
   let install = $state<Install>(null);
   const running = $derived(!!install && !install.done);
   const missing = $derived((list ?? []).filter((c) => !c.installed));
-  const icons: Record<string, string> = { vdd: 'monitor', cable: 'mic', vigem: 'game', usbip: 'usb', winfsp: 'folder' };
+  const icons: Record<string, string> = { vdd: 'monitor', cable: 'mic', vigem: 'game', usbip: 'usb', winfsp: 'folder', printer: 'doc' };
 
   async function detect() {
     list = null;

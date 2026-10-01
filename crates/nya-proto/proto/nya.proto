@@ -76,6 +76,7 @@ enum Feature {
   FEATURE_MULTI_CLIENT = 16;      // since 1.2: several clients at once; one operates, the others watch
   FEATURE_VIDEO_DATAGRAM = 17;    // since 1.4: video as datagrams with FEC (StreamConfig.video_transport)
   FEATURE_FOLDER_MOUNT = 18;      // since 1.4: client folders as a drive on the host (SharedFolders, FS streams)
+  FEATURE_PRINT = 19;             // since 1.4: host print jobs as PDF to the client (FilePurpose PRINT)
 }
 
 // ============================================================================
@@ -466,6 +467,7 @@ enum FilePurpose {
   FILE_PURPOSE_SAVE = 1;              // save into the receiver's Downloads/NyaRemoteControl
   FILE_PURPOSE_CLIPBOARD_IMAGE = 2;   // CF_DIB bytes for the receiver's clipboard
   FILE_PURPOSE_CLIPBOARD = 3;         // files being pasted: into the receiver's paste cache (since 1.2)
+  FILE_PURPOSE_PRINT = 4;             // host -> client: a print job (PDF) to print there (since 1.4, PRINT)
 }
 
 message FileHeader {
