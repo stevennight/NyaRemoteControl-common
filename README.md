@@ -4,11 +4,15 @@
 
 | crate | 内容 |
 |---|---|
-| `nya-proto` | 线协议：`proto/nya.proto`（Protobuf）、视频帧头、流/数据报类型、版本与功能协商、长度前缀读写 |
+| `nya-proto` | 线协议：`proto/nya.proto`（Protobuf）、视频帧头、流/数据报类型、版本与功能协商、长度前缀读写、统计百分位 |
 | `nya-transport` | QUIC（quinn）端点、自签名证书与指纹、配对码与 HMAC 证明 |
 | `nya-ffmpeg-sys` | FFmpeg 8.1 的预生成绑定和链接；构建时把 DLL 复制到输出目录 |
-| `nya-media` | 编码器（NVENC / QSV / AMF / OpenH264）、解码器（D3D11VA / 软件）、Opus |
-| `nya-win` | Windows 层：D3D11 设备、显卡拓扑、DXGI 截屏、颜色转换 shader、跨显卡拷贝、键鼠注入、桌面切换、WASAPI、剪贴板 |
+| `nya-media` | 编码器（NVENC / QSV / AMF / OpenH264）、解码器（D3D11VA / 软件）、Opus、音频抖动缓冲 |
+| `nya-win` | Windows 层：D3D11 设备、显卡拓扑、DXGI 截屏、颜色转换 shader、跨显卡拷贝、键鼠注入、桌面切换、WASAPI、显示配置、剪贴板 |
+| `nya-ui` | egui on Direct3D 11（会话工具条、统计面板），带中文字体 |
+| `nya-webui` | WebView2 宿主：嵌入 `web/` 构建出的页面，页面与 Rust 之间的调用和事件 |
+
+`web/` 是客户端主界面和被控端管理界面（Vite + Svelte 5），`npm run dev` 用示例数据预览。
 
 设计文档见 [docs/design/phase1-architecture.md](docs/design/phase1-architecture.md)。
 
@@ -24,11 +28,13 @@ cargo test                          # 所有测试只用 CPU，不需要显卡
 - 同一 MAJOR 内必须能互通；MINOR 只允许"增加"字段、消息、功能和通道。
 - 新行为一律通过 `Feature` 协商开启，代码里不比较版本号。
 - 字段号和类型永远不改，删除的字段写进 `reserved`；`Hello` / `HelloReply` / `Welcome` / `Reject` 的已有字段永久冻结。
-- 发布新版本时：
+- 开发中**第一次**给协议加字段 / 消息时，把 `PROTO_MINOR` 加一，新字段注释里写 `since X.Y`。已冻结的版本不能再改。
+- server 或 client 发版、且其中的协议版本还没冻结时：
   1. 把 `proto/nya.proto` 复制到 `proto/history/vX.Y/`；
-  2. 修改 `PROTO_MINOR` / `PROTO_MAJOR`；
-  3. 运行 `$env:NYA_BLESS=1; cargo test -p nya-proto --test compat`，生成该版本的样例文件；
-  4. 提交 `tests/compat/vX.Y/`。
+  2. 运行 `$env:NYA_BLESS=1; cargo test -p nya-proto --test compat`，生成 `tests/compat/vX.Y/`；
+  3. 提交并推送 common，再运行发版脚本。
+
+  发版脚本会检查这一点（`scripts/release-lib.ps1` 的 `Test-NyaProtoFrozen`）：当前版本没冻结，或 `nya.proto` 与冻结的不一致，都会拒绝发版。
 
 ## 重新生成 FFmpeg 绑定（升级 FFmpeg 时）
 
