@@ -8,6 +8,7 @@ export type Defaults = {
   bitrate_kbps: number;
   unlimited_bitrate: boolean;
   bitrate_policy: string; // auto | quality | balanced | smooth | fixed
+  video_transport: string; // auto | stream | datagram
   max_fps: number;
   encoder: string;
   codec: string;

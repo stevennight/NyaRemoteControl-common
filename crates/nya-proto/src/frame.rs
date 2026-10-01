@@ -25,6 +25,9 @@ pub mod datagram_type {
     pub const AUDIO: u8 = 1;
     /// Client microphone -> host (same layout as AUDIO).
     pub const MIC: u8 = 2;
+    /// Host -> client: one shard of a video frame (FEATURE_VIDEO_DATAGRAM);
+    /// layout in `nya_transport::videodgram`.
+    pub const VIDEO: u8 = 3;
 }
 
 pub mod frame_flags {

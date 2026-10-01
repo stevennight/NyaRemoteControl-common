@@ -74,6 +74,7 @@ enum Feature {
   FEATURE_CLIPBOARD_FILES = 14;   // since 1.2: copied files offered both ways, fetched when pasted
   FEATURE_MULTI_STREAM = 15;      // since 1.2: several displays at once, one stream per `slot`
   FEATURE_MULTI_CLIENT = 16;      // since 1.2: several clients at once; one operates, the others watch
+  FEATURE_VIDEO_DATAGRAM = 17;    // since 1.4: video as datagrams with FEC (StreamConfig.video_transport)
 }
 
 // ============================================================================
@@ -257,6 +258,14 @@ message StreamConfig {
   uint32 bitrate_kbps = 6;
   StreamMode mode = 7;
   BitratePolicy bitrate_policy = 8;   // since 1.1
+  VideoTransport video_transport = 9; // since 1.4 (FEATURE_VIDEO_DATAGRAM)
+}
+
+// How video frames travel (FEATURE_VIDEO_DATAGRAM; without it always a stream).
+enum VideoTransport {
+  VIDEO_TRANSPORT_AUTO = 0;       // datagrams + FEC in game mode, a stream in office mode
+  VIDEO_TRANSPORT_STREAM = 1;     // reliable stream: never loses a frame, stalls on loss
+  VIDEO_TRANSPORT_DATAGRAM = 2;   // datagrams + FEC in both modes
 }
 
 // How the host adapts the bitrate to the network.
@@ -332,6 +341,11 @@ message ClientStats {
   float render_ms_p50 = 2;
   uint32 frames_dropped = 3;
   uint32 fps = 4;
+  // Video datagrams in the interval (FEATURE_VIDEO_DATAGRAM); since 1.4.
+  uint32 video_shards_received = 5;
+  uint32 video_shards_lost = 6;
+  uint32 video_frames_recovered = 7;   // rebuilt from parity
+  uint32 video_frames_lost = 8;        // not enough shards
 }
 
 message ServerStats {
@@ -344,6 +358,7 @@ message ServerStats {
   string bitrate_note = 7;       // policy and reason of the last change; since 1.1
   uint32 slot = 8;               // stream these numbers are about; since 1.2
   float encode_ms_p99 = 9;       // over the last 10 s (0 = not reported); since 1.3
+  uint32 fec_percent = 10;       // parity of video datagrams; 0 = video on a stream; since 1.4
 }
 
 message ClipboardText { string text = 1; }

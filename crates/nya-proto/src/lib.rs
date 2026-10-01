@@ -18,7 +18,7 @@ pub mod pb {
 
 /// Current protocol version spoken by this build.
 pub const PROTO_MAJOR: u32 = 1;
-pub const PROTO_MINOR: u32 = 3;
+pub const PROTO_MINOR: u32 = 4;
 /// Oldest MAJOR this build can still speak.
 pub const MIN_PROTO_MAJOR: u32 = 1;
 

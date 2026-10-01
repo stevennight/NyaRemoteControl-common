@@ -22,8 +22,9 @@ pub fn transport_config() -> TransportConfig {
     t.stream_receive_window(VarInt::from_u32(16 << 20));
     t.receive_window(VarInt::from_u32(32 << 20));
     t.send_window(4 << 20);
-    t.datagram_receive_buffer_size(Some(1 << 20));
-    t.datagram_send_buffer_size(1 << 20);
+    // Video datagrams (FEATURE_VIDEO_DATAGRAM): a keyframe arrives as one burst.
+    t.datagram_receive_buffer_size(Some(8 << 20));
+    t.datagram_send_buffer_size(2 << 20);
     t
 }
 

@@ -68,6 +68,12 @@
     ['fixed', '固定码率', '从不自动调整'],
   ];
   const policyHelp = $derived(policies.find((p) => p[0] === d.bitrate_policy)?.[2] ?? '');
+  const transports = [
+    ['auto', '自动', '游戏模式用“数据报 + 纠错”，办公模式用可靠传输'],
+    ['stream', '可靠传输', '不丢画面，但网络丢包时会卡一下等重传'],
+    ['datagram', '数据报 + 纠错', '丢包时靠纠错数据恢复，恢复不了就跳过这一帧，不卡顿；多占约 10–50% 带宽'],
+  ];
+  const transportHelp = $derived(transports.find((p) => p[0] === d.video_transport)?.[2] ?? '');
 
   async function save() {
     saving = true;
@@ -189,6 +195,12 @@
       <div class="text"><b>网络变差时</b><span>{policyHelp}</span></div>
       <select class="input" bind:value={d.bitrate_policy} aria-label="码率策略">
         {#each policies as [v, l] (v)}<option value={v}>{l}</option>{/each}
+      </select>
+    </div>
+    <div class="field">
+      <div class="text"><b>画面传输方式</b><span>{transportHelp}</span></div>
+      <select class="input" bind:value={d.video_transport} aria-label="画面传输方式">
+        {#each transports as [v, l] (v)}<option value={v}>{l}</option>{/each}
       </select>
     </div>
     <div class="field">
