@@ -1,0 +1,594 @@
+// NyaRemoteControl wire protocol.
+//
+// Compatibility rules (see docs/design/phase1-architecture.md §6.4):
+//  * never change a field's number or type; removed fields go to `reserved`
+//  * a missing field's default value must mean "old behaviour"
+//  * new behaviour is gated by Feature negotiation, not by version comparisons
+//  * Hello / HelloReply / Welcome / Reject existing fields are frozen forever
+syntax = "proto3";
+package nya.v1;
+
+// ============================================================================
+// Handshake (control stream, first exchange)
+// ============================================================================
+
+// First message the client writes on the control stream.
+message Hello {
+  uint32 proto_major = 1;
+  uint32 proto_minor = 2;
+  // Oldest MAJOR this client can still speak. 0 means "same as proto_major".
+  uint32 min_proto_major = 3;
+  string client_name = 4;
+  string client_version = 5;
+  // Feature numbers (see enum Feature). uint32 so unknown values survive decoding.
+  repeated uint32 features = 6;
+}
+
+message HelloReply {
+  oneof reply {
+    Welcome welcome = 1;
+    Reject reject = 2;
+  }
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_CLIENT_TOO_OLD = 1;   // client must be upgraded
+  REJECT_REASON_SERVER_TOO_OLD = 2;   // server must be upgraded
+  REJECT_REASON_AUTH_FAILED = 3;
+  REJECT_REASON_BUSY = 4;
+  REJECT_REASON_NOT_PAIRED = 5;
+}
+
+message Reject {
+  RejectReason reason = 1;
+  string message = 2;   // human readable, can be shown as-is
+  uint32 server_proto_major = 3;
+  uint32 server_min_proto_major = 4;
+}
+
+message Welcome {
+  uint32 proto_major = 1;          // MAJOR used for this session
+  uint32 proto_minor = 2;
+  string server_name = 3;
+  string server_version = 4;
+  repeated uint32 features = 5;    // intersection = features enabled for this session
+  bool needs_pairing = 6;          // true: an AuthChallenge follows
+}
+
+enum Feature {
+  FEATURE_UNSPECIFIED = 0;
+  FEATURE_AUDIO = 1;
+  FEATURE_LOCAL_CURSOR = 2;
+  FEATURE_CLIPBOARD_TEXT = 3;
+  FEATURE_YUV444 = 4;
+  FEATURE_STATIC_REFINE = 5;
+  FEATURE_SAS = 6;
+  FEATURE_MULTI_GPU_INFO = 7;
+  FEATURE_FILE_TRANSFER = 8;      // since 1.1
+  FEATURE_CLIPBOARD_IMAGE = 9;    // since 1.1
+  FEATURE_MICROPHONE = 10;        // since 1.1: client mic -> host virtual cable
+  FEATURE_USB_REDIRECT = 11;      // since 1.1: USB/IP through a tunnel
+  FEATURE_GAMEPAD = 12;           // since 1.1: XInput pads -> virtual Xbox 360 pads
+  FEATURE_VIRTUAL_DISPLAY = 13;   // since 1.2: StartStream.display_setup
+  FEATURE_CLIPBOARD_FILES = 14;   // since 1.2: copied files offered both ways, fetched when pasted
+  FEATURE_MULTI_STREAM = 15;      // since 1.2: several displays at once, one stream per `slot`
+  FEATURE_MULTI_CLIENT = 16;      // since 1.2: several clients at once; one operates, the others watch
+  FEATURE_VIDEO_DATAGRAM = 17;    // since 1.4: video as datagrams with FEC (StreamConfig.video_transport)
+  FEATURE_FOLDER_MOUNT = 18;      // since 1.4: client folders as a drive on the host (SharedFolders, FS streams)
+  FEATURE_PRINT = 19;             // since 1.4: host print jobs as PDF to the client (FilePurpose PRINT)
+  FEATURE_HDR = 20;               // since 1.4: HDR10 video (StreamConfig.hdr, CodecCap.ten_bit)
+}
+
+// ============================================================================
+// Control messages (control stream, after the handshake)
+// ============================================================================
+
+message ControlMsg {
+  oneof msg {
+    AuthChallenge auth_challenge = 1;
+    AuthResponse auth_response = 2;
+    AuthResult auth_result = 3;
+    SessionInfo session_info = 4;
+    ClientCaps client_caps = 5;
+    StartStream start_stream = 6;
+    StreamStarted stream_started = 7;
+    SetMode set_mode = 8;
+    RequestKeyframe request_keyframe = 9;
+    DisplayChanged display_changed = 10;
+    Ping ping = 11;
+    Pong pong = 12;
+    ClientStats client_stats = 13;
+    ClipboardText clipboard_text = 14;
+    SendSas send_sas = 15;
+    Bye bye = 16;
+    StreamError stream_error = 17;
+    StopStream stop_stream = 18;
+    ServerStats server_stats = 19;
+    FileOffer file_offer = 20;       // since 1.1
+    FileRequest file_request = 21;   // since 1.1
+    FileResult file_result = 22;     // since 1.1
+    UsbAttach usb_attach = 23;       // since 1.1
+    UsbDetach usb_detach = 24;       // since 1.1
+    UsbStatus usb_status = 25;       // since 1.1
+    GamepadRumble gamepad_rumble = 26;  // since 1.1
+    SessionRole session_role = 27;      // since 1.2 (MULTI_CLIENT)
+    TakeControl take_control = 28;      // since 1.2 (MULTI_CLIENT)
+    SharedFolders shared_folders = 29;  // since 1.4 (FOLDER_MOUNT)
+    FolderMountStatus folder_mount_status = 30;  // since 1.4 (FOLDER_MOUNT)
+  }
+}
+
+// Client -> host (FOLDER_MOUNT): folders of the client to show on the host as
+// one drive, each as a top-level directory. Sent again whenever the list
+// changes; an empty list unmounts. Only the operating client's list counts.
+message SharedFolders {
+  repeated SharedFolder folders = 1;
+}
+
+message SharedFolder {
+  string name = 1;        // directory name on the drive (unique, no '/' or '\')
+  bool read_only = 2;
+}
+
+// Host -> client (FOLDER_MOUNT): what became of SharedFolders.
+message FolderMountStatus {
+  bool mounted = 1;
+  string mount_point = 2;   // e.g. "Z:"
+  string message = 3;       // why not, or a note; shown as-is
+}
+
+// FS stream (bidi, type 6, opened by the host): one FsRequest, one FsReply.
+// Paths are '/'-separated and start at the drive root: "/" lists the shared
+// folders, "/<folder name>/a/b.txt" is a file inside one. The client serves
+// nothing outside the shared folders and refuses writes to read-only ones.
+message FsRequest {
+  string path = 1;
+  oneof op {
+    FsStat stat = 2;
+    FsList list = 3;
+    FsRead read = 4;
+    FsWrite write = 5;
+    FsCreate create = 6;
+    FsRemove remove = 7;
+    FsRename rename = 8;
+    FsTruncate truncate = 9;
+    FsSetTimes set_times = 10;
+    FsVolume volume = 11;
+  }
+}
+
+message FsStat {}
+message FsList {}
+message FsRead { uint64 offset = 1; uint32 len = 2; }      // len at most 512 KiB
+message FsWrite { uint64 offset = 1; bytes data = 2; }      // data at most 512 KiB
+message FsCreate { bool dir = 1; bool exclusive = 2; }      // exclusive: fail if it exists
+message FsRemove { bool dir = 1; }
+message FsRename { string to = 1; bool replace = 2; }
+message FsTruncate { uint64 size = 1; }
+message FsSetTimes { int64 mtime_us = 1; int64 atime_us = 2; }   // Unix µs; 0 = leave
+message FsVolume {}
+
+message FsAttr {
+  bool dir = 1;
+  uint64 size = 2;
+  int64 mtime_us = 3;     // Unix µs
+  int64 atime_us = 4;
+  int64 ctime_us = 5;     // creation
+  bool read_only = 6;
+  bool hidden = 7;
+}
+
+message FsEntry {
+  string name = 1;
+  FsAttr attr = 2;
+}
+
+enum FsError {
+  FS_OK = 0;
+  FS_NOT_FOUND = 1;
+  FS_EXISTS = 2;
+  FS_ACCESS = 3;          // denied, or a read-only folder
+  FS_NOT_EMPTY = 4;
+  FS_IS_DIR = 5;
+  FS_NOT_DIR = 6;
+  FS_INVALID = 7;
+  FS_NO_SPACE = 8;
+  FS_IO = 9;              // anything else
+}
+
+message FsReply {
+  FsError error = 1;
+  FsAttr attr = 2;               // stat, create
+  repeated FsEntry entries = 3;  // list
+  bytes data = 4;                // read (shorter at the end of the file)
+  uint32 written = 5;            // write
+  uint64 total_bytes = 6;        // volume
+  uint64 free_bytes = 7;
+}
+
+// Host -> client (MULTI_CLIENT): who operates the host. Sent after connecting
+// and whenever it changes. Without it, a client operates the host. Requests of
+// a watching client that change the host (input, stream settings, clipboard,
+// USB) are ignored; it gets the same picture as the operating client.
+message SessionRole {
+  bool controlling = 1;          // this client operates the host
+  string controller = 2;         // name of the operating client ('' = nobody)
+  repeated string viewers = 3;   // names of the watching clients
+}
+
+// Client -> host (MULTI_CLIENT): a watching client takes over operating the
+// host. The previous operator watches from then on, or is disconnected (`kick`).
+message TakeControl {
+  bool kick = 1;
+}
+
+// Host -> client: force feedback for pad `index` (0..255 per motor).
+message GamepadRumble {
+  uint32 index = 1;
+  uint32 large_motor = 2;
+  uint32 small_motor = 3;
+}
+
+// ---------------------------------------------------------------------------
+// USB passthrough (feature USB_REDIRECT)
+//
+// The client shares a device with usbipd-win (USB/IP server, TCP 3240 on the
+// client). The host attaches it with usbip-win2 to a local tunnel endpoint;
+// each TCP connection is carried on a bidi stream the host opens:
+//   varint stream type TUNNEL, varint target port, then raw bytes both ways.
+// ---------------------------------------------------------------------------
+
+// Client -> host: attach this device (already bound with usbipd on the client).
+message UsbAttach {
+  string busid = 1;
+  string description = 2;
+}
+
+message UsbDetach { string busid = 1; }
+
+// Host -> client: result / state change of a device.
+message UsbStatus {
+  string busid = 1;
+  bool attached = 2;
+  string message = 3;
+}
+
+// --- pairing (only when Welcome.needs_pairing) ---
+message AuthChallenge { bytes server_nonce = 1; }
+message AuthResponse {
+  bytes client_nonce = 1;
+  bytes mac = 2;          // HMAC-SHA256(pairing key, client transcript)
+}
+message AuthResult {
+  bool ok = 1;
+  bytes server_mac = 2;   // HMAC-SHA256(pairing key, server transcript); lets the client trust the server cert
+  string message = 3;
+}
+
+// --- session ---
+enum Codec {
+  CODEC_UNSPECIFIED = 0;
+  CODEC_H264 = 1;
+  CODEC_HEVC = 2;
+  CODEC_AV1 = 3;
+}
+
+enum Chroma {
+  CHROMA_UNSPECIFIED = 0;
+  CHROMA_YUV420 = 1;
+  CHROMA_YUV444 = 2;
+}
+
+enum StreamMode {
+  STREAM_MODE_UNSPECIFIED = 0;   // treated as OFFICE
+  STREAM_MODE_OFFICE = 1;
+  STREAM_MODE_GAME = 2;
+}
+
+message CodecCap {
+  Codec codec = 1;
+  Chroma chroma = 2;
+  uint32 max_width = 3;
+  uint32 max_height = 4;
+  bool hardware = 5;
+  bool ten_bit = 6;   // 10-bit 4:2:0 (HEVC Main10 / AV1 10-bit); since 1.4
+}
+
+message GpuInfo {
+  uint32 index = 1;
+  string name = 2;
+  uint32 vendor_id = 3;
+  uint64 luid = 4;
+  repeated CodecCap encoders = 5;
+  string encoder_backend = 6;   // "nvenc" / "qsv" / "amf" / ""
+}
+
+message DisplayInfo {
+  uint32 id = 1;
+  string name = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  int32 x = 5;
+  int32 y = 6;
+  uint32 refresh_hz = 7;
+  bool primary = 8;
+  uint32 gpu_index = 9;         // GPU the display is attached to (capture GPU)
+  bool is_virtual = 10;         // the session's virtual display; since 1.2
+  bool hdr = 11;                // HDR desktop (streamed tone-mapped to SDR); since 1.2
+  // 1-based position in DisplaySetup.virtual_screens (0 = physical display),
+  // so a client can size each virtual screen after the window showing it. Since 1.2.
+  uint32 virtual_index = 12;
+}
+
+message SessionInfo {
+  string host_name = 1;
+  repeated DisplayInfo displays = 2;
+  repeated GpuInfo gpus = 3;
+  // Name of the host playback device that receives the client microphone
+  // (e.g. "CABLE Input"); empty = no virtual cable installed. Since 1.1.
+  string mic_device = 4;
+  // usbip-win2 is installed on the host (USB passthrough possible). Since 1.1.
+  bool usb_available = 5;
+  // ViGEmBus is installed on the host (gamepads possible). Since 1.1.
+  bool gamepad_available = 6;
+  // The virtual display driver is installed on the host. Since 1.2.
+  bool virtual_display_available = 7;
+}
+
+message ClientCaps {
+  repeated CodecCap decoders = 1;
+  uint32 max_width = 2;
+  uint32 max_height = 3;
+  uint32 max_fps = 4;
+}
+
+message StreamConfig {
+  Codec codec = 1;
+  Chroma chroma = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 fps = 5;
+  uint32 bitrate_kbps = 6;
+  StreamMode mode = 7;
+  BitratePolicy bitrate_policy = 8;   // since 1.1
+  VideoTransport video_transport = 9; // since 1.4 (FEATURE_VIDEO_DATAGRAM)
+  // Request: the client shows HDR (its display is in HDR mode). Reply: the
+  // stream is HDR10 (HEVC Main10, BT.2020, PQ). Since 1.4 (FEATURE_HDR).
+  bool hdr = 10;
+}
+
+// How video frames travel (FEATURE_VIDEO_DATAGRAM; without it always a stream).
+enum VideoTransport {
+  VIDEO_TRANSPORT_AUTO = 0;       // datagrams + FEC in game mode, a stream in office mode
+  VIDEO_TRANSPORT_STREAM = 1;     // reliable stream: never loses a frame, stalls on loss
+  VIDEO_TRANSPORT_DATAGRAM = 2;   // datagrams + FEC in both modes
+}
+
+// How the host adapts the bitrate to the network.
+enum BitratePolicy {
+  BITRATE_POLICY_UNSPECIFIED = 0;   // automatic: office -> QUALITY, game -> BALANCED
+  BITRATE_POLICY_QUALITY = 1;       // only on sustained heavy backlog; floor 60 %
+  BITRATE_POLICY_BALANCED = 2;      // backlog or queueing delay; floor 35 %
+  BITRATE_POLICY_SMOOTH = 3;        // backlog, delay or loss; floor 15 %
+  BITRATE_POLICY_FIXED = 4;         // never adapt
+}
+
+// Client request. Zero / UNSPECIFIED fields mean "server decides".
+message StartStream {
+  uint32 display_id = 1;           // 0 = primary (the first virtual screen, when there are any)
+  StreamConfig config = 2;
+  string encoder_preference = 3;   // "", "auto", "nvenc", "qsv", "software"
+  DisplaySetup display_setup = 4;   // since 1.2 (feature VIRTUAL_DISPLAY); only slot 0's counts
+  // Which client window this stream is for (FEATURE_MULTI_STREAM). 0 = the
+  // main window; every other slot is an extra window showing another display.
+  // A StartStream for a new slot starts an additional stream. Since 1.2.
+  uint32 slot = 5;
+}
+
+// How the host's displays should look while the client is attached. Sent
+// again (in a new StartStream) to change it, e.g. when the client window is
+// resized. The host restores its own layout after the client leaves.
+// Absent / no virtual screens and nothing else set = displays as they are.
+message DisplaySetup {
+  repeated VirtualScreen virtual_screens = 1;   // at most 4; the first one becomes primary
+  bool physical_off = 2;         // switch the physical displays off (needs a virtual screen)
+  bool block_local_input = 3;    // block the host's own keyboard and mouse
+}
+
+message VirtualScreen {
+  uint32 width = 1;              // 0 = 1920x1080
+  uint32 height = 2;
+  uint32 refresh_hz = 3;         // 0 = 60
+  uint32 scale_percent = 4;      // Windows display scaling; 0 = leave as is
+}
+
+message StreamStarted {
+  uint32 display_id = 1;
+  StreamConfig config = 2;         // what the server actually uses
+  uint64 stream_id = 3;            // matches the video stream prelude
+  string encoder_name = 4;         // e.g. "hevc_nvenc"
+  uint32 capture_gpu_index = 5;
+  uint32 encode_gpu_index = 6;
+  bool cross_gpu = 7;
+  uint32 source_width = 8;         // display size in pixels (cursor coordinates use this)
+  uint32 source_height = 9;
+  bool hdr_tonemapped = 10;        // HDR desktop converted to SDR; since 1.2
+  uint32 slot = 11;                // see StartStream.slot; since 1.2
+}
+
+message StreamError {
+  string message = 1;
+  uint32 slot = 2;   // since 1.2
+}
+// Stop the stream of `slot` (0 = the main window's; extra windows keep theirs).
+message StopStream { uint32 slot = 1; }
+message SetMode { StreamMode mode = 1; }
+message RequestKeyframe { uint32 slot = 1; }
+message DisplayChanged { repeated DisplayInfo displays = 1; }
+
+message Ping { uint64 t_us = 1; }
+message Pong {
+  uint64 t_us = 1;          // echo of Ping.t_us
+  uint64 server_t_us = 2;   // server clock when replying
+}
+
+message ClientStats {
+  float decode_ms_p50 = 1;
+  float render_ms_p50 = 2;
+  uint32 frames_dropped = 3;
+  uint32 fps = 4;
+  // Video datagrams in the interval (FEATURE_VIDEO_DATAGRAM); since 1.4.
+  uint32 video_shards_received = 5;
+  uint32 video_shards_lost = 6;
+  uint32 video_frames_recovered = 7;   // rebuilt from parity
+  uint32 video_frames_lost = 8;        // not enough shards
+}
+
+message ServerStats {
+  float capture_ms_p50 = 1;
+  float encode_ms_p50 = 2;
+  float transfer_ms_p50 = 3;   // cross-GPU copy
+  uint32 fps = 4;
+  uint32 bitrate_kbps = 5;       // measured
+  uint32 target_kbps = 6;        // current encoder target (adaptive bitrate); since 1.1
+  string bitrate_note = 7;       // policy and reason of the last change; since 1.1
+  uint32 slot = 8;               // stream these numbers are about; since 1.2
+  float encode_ms_p99 = 9;       // over the last 10 s (0 = not reported); since 1.3
+  uint32 fec_percent = 10;       // parity of video datagrams; 0 = video on a stream; since 1.4
+}
+
+message ClipboardText { string text = 1; }
+
+// ---------------------------------------------------------------------------
+// File transfer (feature FILE_TRANSFER / CLIPBOARD_IMAGE)
+//
+// Data goes on uni streams of type 4 (either direction):
+//   varint stream type, length-delimited FileHeader, then exactly `size` bytes.
+// ---------------------------------------------------------------------------
+
+enum FilePurpose {
+  FILE_PURPOSE_UNSPECIFIED = 0;
+  FILE_PURPOSE_SAVE = 1;              // save into the receiver's Downloads/NyaRemoteControl
+  FILE_PURPOSE_CLIPBOARD_IMAGE = 2;   // CF_DIB bytes for the receiver's clipboard
+  FILE_PURPOSE_CLIPBOARD = 3;         // files being pasted: into the receiver's paste cache (since 1.2)
+  FILE_PURPOSE_PRINT = 4;             // host -> client: a print job (PDF) to print there (since 1.4, PRINT)
+}
+
+message FileHeader {
+  uint64 transfer_id = 1;   // groups the files of one batch
+  string name = 2;          // file name only
+  uint64 size = 3;
+  FilePurpose purpose = 4;
+  uint32 index = 5;         // 0-based position in the batch
+  uint32 count = 6;         // files in the batch
+  string path = 7;          // relative path inside the batch, '/' separated (folders); since 1.2
+}
+
+message FileEntry {
+  string name = 1;          // file name only
+  uint64 size = 2;
+  string path = 3;          // relative path, '/' separated, e.g. "photos/2026/a.jpg"; since 1.2
+  bool is_dir = 4;          // a folder (listed so empty folders are recreated); since 1.2
+}
+
+// Files were copied on one side; the other side may request them. Host ->
+// client since 1.0; client -> host too with FEATURE_CLIPBOARD_FILES, where the
+// receiver puts them on its clipboard and requests them when they are pasted.
+message FileOffer {
+  uint64 transfer_id = 1;
+  repeated FileEntry files = 2;
+}
+
+// Send the files of this offer.
+message FileRequest {
+  uint64 transfer_id = 1;
+  FilePurpose purpose = 2;   // UNSPECIFIED = SAVE (Downloads); CLIPBOARD = paste in progress (since 1.2)
+}
+
+// Receiver -> sender: outcome of a batch (or of one failed file).
+message FileResult {
+  uint64 transfer_id = 1;
+  bool ok = 2;
+  string message = 3;
+  string saved_to = 4;      // folder the files were saved in
+}
+message SendSas {}
+message Bye { string reason = 1; }
+
+// ============================================================================
+// Input stream (client -> server, uni stream type 1)
+// ============================================================================
+
+enum MouseButton {
+  MOUSE_BUTTON_UNSPECIFIED = 0;
+  MOUSE_BUTTON_LEFT = 1;
+  MOUSE_BUTTON_RIGHT = 2;
+  MOUSE_BUTTON_MIDDLE = 3;
+  MOUSE_BUTTON_X1 = 4;
+  MOUSE_BUTTON_X2 = 5;
+}
+
+message InputMsg {
+  oneof ev {
+    MouseAbs mouse_abs = 1;
+    MouseRel mouse_rel = 2;
+    MouseButtonEv mouse_button = 3;
+    Wheel wheel = 4;
+    Key key = 5;
+    ReleaseAll release_all = 6;
+    Gamepad gamepad = 7;             // since 1.1
+  }
+}
+
+// XInput state of one controller (XINPUT_GAMEPAD layout).
+message Gamepad {
+  uint32 index = 1;          // 0..3
+  bool connected = 2;        // false = unplugged
+  uint32 buttons = 3;        // XINPUT_GAMEPAD_* bits
+  uint32 left_trigger = 4;   // 0..255
+  uint32 right_trigger = 5;
+  sint32 lx = 6;             // -32768..32767
+  sint32 ly = 7;
+  sint32 rx = 8;
+  sint32 ry = 9;
+}
+
+// Coordinates normalised to 0..65535 across the streamed display.
+// Coordinates normalised to 0..65535 across the display of `slot` (since 1.2).
+message MouseAbs { uint32 x = 1; uint32 y = 2; uint32 slot = 3; }
+message MouseRel { int32 dx = 1; int32 dy = 2; }
+message MouseButtonEv { MouseButton button = 1; bool down = 2; }
+// Units of 1/120 of a notch (WHEEL_DELTA).
+message Wheel { int32 dx = 1; int32 dy = 2; }
+// PC/AT set-1 scancode; `extended` = E0 prefix.
+message Key { uint32 scancode = 1; bool extended = 2; bool down = 3; }
+message ReleaseAll {}
+
+// ============================================================================
+// Cursor stream (server -> client, uni stream type 3)
+// ============================================================================
+
+message CursorMsg {
+  oneof msg {
+    CursorShape shape = 1;
+    CursorState state = 2;
+  }
+}
+
+message CursorShape {
+  uint32 id = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  int32 hot_x = 4;
+  int32 hot_y = 5;
+  bytes rgba = 6;   // straight alpha, row-major, width*height*4
+}
+
+message CursorState {
+  uint32 shape_id = 1;
+  bool visible = 2;
+  int32 x = 3;      // hotspot position in source display pixels
+  int32 y = 4;
+  uint32 slot = 5;  // stream whose display this is about (since 1.2)
+}
