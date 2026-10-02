@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 |---|---|
 | 状态 | v0.4：第一阶段（M0–M7）和大部分第二、三阶段功能已实现；实机验证情况见 §13。v0.2：协议兼容、多显卡与笔记本；v0.3：按实现修订 §2、§5、§6；v0.4：按 09-27 之后的实现全面修订（见下方"调整摘要"和 §14） |
-| 日期 | 2026-10-01 |
+| 日期 | 2026-10-02 |
 | 范围 | 整体架构 + 第一阶段（Windows ↔ Windows 可用版）详细设计；之后新增的设计见 §14，剩余规划见 §12 |
 
 ### v0.4 调整摘要（与最初方案不同、以现在为准的地方）
@@ -40,7 +40,7 @@
 - **不做内网穿透 / 中转 / 账号体系**。网络由外部组网工具（Tailscale / EasyTier / ZeroTier 等）负责，本程序只连对方 IP:端口。
 - 不做多会话（不给每个连接者创建独立桌面）。同一被控机可以有多个客户端同时连接，但同一时刻只有一个操作者，其余观看（§14.3）。
 - 不支持 RDP 会话内运行（只服务控制台会话）。
-- 暂不做：HDR 原样传输（目前转换为 SDR，§3.6）、Android 客户端。
+- 暂不做：Android 客户端的 HDR、麦克风、USB、文件夹挂载、打印（§14.9）。
 
 ### 目标环境
 - 被控端：Windows 10 21H2+ / Windows 11，x64，NVIDIA（GTX 10 系及以上）或 Intel 核显（Gen9+，HEVC 4:4:4 需 Gen11+）。
@@ -110,13 +110,15 @@ service 与 helper 是**同一个可执行文件（`nya-server-svc.exe`）的不
 
 ## 2. 代码仓库结构
 
-三个独立仓库放在同级目录，共享一个 `target/`；FFmpeg 等第三方文件放在不属于任何仓库的 `third_party/`。server 和 client 各自发版，发布时用 `COMMON_REF` 文件固定所用的 common 提交：
+四个独立仓库放在同级目录，共享一个 `target/`；FFmpeg 等第三方文件放在不属于任何仓库的 `third_party/`。server、client、android 各自发版，发布时用 `COMMON_REF` 文件固定所用的 common 提交：
 
 ```
 NyaRemoteControl/
 ├─ common/   仓库：公共 crate、Web 界面、脚本与本文档
 ├─ server/   仓库：被控端（Cargo workspace，见下）
 ├─ client/   仓库：nya-client（Windows 客户端）
+├─ android/  仓库：Android 客户端（Kotlin 界面 + Rust 核心，§14.9）
+├─ signing/  不属于任何仓库：Android 发版签名密钥（备份到密码管理器）
 └─ third_party/   FFmpeg 8.1 LGPL 预编译包、ViGEmClient 源码、可选组件安装包
                   （common/scripts/fetch-*.ps1 下载，固定版本并校验 SHA-256）
 ```
@@ -131,7 +133,8 @@ common/
 │  │  └─ tests/compat/vX.Y/    对应版本编码的样例消息（兼容性测试）
 │  ├─ nya-transport/    QUIC 封装、证书指纹、配对 HMAC、文件传输与剪贴板文件的收发记账（Android 共用）
 │  ├─ nya-ffmpeg-sys/   FFmpeg 预生成绑定与链接
-│  ├─ nya-media/        编码器 / 解码器、Opus、音频抖动缓冲（jitter.rs，纯 Rust）
+│  ├─ nya-media/        编码器 / 解码器、Opus（链接 FFmpeg）
+│  ├─ nya-jitter/       音频自适应抖动缓冲，纯 Rust（Windows 客户端经 nya_media::jitter 使用，Android 共用）
 │  ├─ nya-win/          Windows 平台层：D3D11、显卡拓扑、DXGI 复制、颜色转换、跨显卡拷贝、
 │  │                    SendInput、WASAPI、桌面切换、CCD 显示配置、设备节点、剪贴板（含 OLE 虚拟文件）
 │  ├─ nya-ui/           egui on D3D11（会话工具条、统计面板），带中文字体
@@ -521,6 +524,7 @@ u16 reserved
 | 1.2 | 虚拟显示器 / 隐私屏（`DisplaySetup`）、剪贴板文件、多画面（`slot`）、多客户端（`SessionRole` / `TakeControl`）、HDR 标记 | 已发布（server / client 0.2.0、0.3.0）、已冻结 |
 | 1.3 | `ServerStats.encode_ms_p99` | 已发布（server / client 0.4.0）、已冻结 |
 | 1.4 | 视频数据报 + 纠错（`FEATURE_VIDEO_DATAGRAM`、`StreamConfig.video_transport`、`ClientStats` 分片统计、`ServerStats.fec_percent`）；文件夹挂载（`FEATURE_FOLDER_MOUNT`、`SharedFolders` / `FolderMountStatus`、FS 流与 `FsRequest` / `FsReply`）；打印到客户端（`FEATURE_PRINT`、`FilePurpose.PRINT`）；HDR10 直通（`FEATURE_HDR`、`StreamConfig.hdr`、`CodecCap.ten_bit`） | 已发布（server / client 0.5.0）、已冻结 |
+| 1.5 | 文字输入（`FEATURE_TEXT_INPUT`、`InputMsg.text`）：客户端输入的文字由被控端以 Unicode 打入，与被控端键盘布局、输入法无关（手机直接输入中文） | 开发中，未发布、未冻结 |
 
 **兼容性测试**
 - 每次发布，把 `.proto` 冻结一份到 `nya-proto/proto/history/vX.Y/`，并用 `NYA_BLESS=1 cargo test -p nya-proto --test compat` 生成 `tests/compat/vX.Y/`。发版脚本（`release-lib.ps1` 的 `Test-NyaProtoFrozen`）会检查当前协议版本已冻结且与冻结的 `.proto` 一致，否则拒绝发版。
@@ -660,7 +664,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | USB 重定向（usbip-win2） | ✅ 已实现（§14.6） |
 | 手柄（ViGEmBus） | ✅ 已实现（§14.6） |
 | AMD AMF 编码 | ✅ 已接入（按显卡厂商选择，未在 AMD 显卡上实测） |
-| Android 客户端 | ⏸ 未开始 |
+| Android 客户端 | ✅ 已实现（§14.9），未在手机上实测 |
 | 打印（虚拟 PDF 打印机回传） | ✅ 已实现（§14.6） |
 | 游戏模式弱网：视频走数据报 + FEC | ✅ 已实现（§6.5） |
 
@@ -691,6 +695,8 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | | 管理程序 + 控制管道（服务模式下的管道权限） |
 | | 安装包升级、自动更新与回滚（R11；0.2.0 安装的被控端没有更新程序，第一次需手动升级） |
 | | QSV、AMF、跨显卡传输（需要对应硬件） |
+| | Android 客户端全部功能（§14.9；开发机没有模拟器） |
+| | 文字输入（`KEYEVENTF_UNICODE`，协议 1.5） |
 
 自动测试（CPU / 回环）覆盖：协议编解码与跨版本解码、版本协商；QUIC 连接、证书指纹锁定、配对 HMAC；编码方案选择逻辑；端到端网络协议（配对、推流、流控、输入回传、Ping、多客户端、游戏模式视频走数据报并还原）；视频分片与纠错（丢分片恢复、丢帧、乱序、重复、换流、丢包统计）；码率自适应策略；Opus 编解码、OpenH264 编码→软件解码；抖动缓冲（稳态直通、抖动、时钟漂移、丢包、暂停、积压）；着色器编译、YUV→RGB 矩阵、光标形状转换。
 
@@ -750,3 +756,15 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 - 版本：server、client 各自的 `VERSION` 文件（语义化版本），和 Cargo.toml 保持一致；显示的版本带提交号。`scripts/release.ps1 x.y.z` 改版本、写 `COMMON_REF`、提交并打 tag；推送 tag 后 GitHub Actions 构建 NSIS 安装包、便携 zip 和 `.sha256` 并发布到 Releases（带后缀的为预发布）。发版前检查 common 已推送、协议已冻结（§6.4）。
 - 被控端更新：服务每 12 小时检查 GitHub Releases。确认更新后，服务下载安装包并核对 SHA-256，再启动独立于服务的更新程序（`%ProgramData%\NyaRemoteControl\update\nya-updater.exe`，即 `nya-server-svc.exe` 的副本，`apply-update` 子命令）：备份当前文件 → 静默安装 → 等待新版本服务在 120 秒内通过控制管道应答 → 不正常则恢复备份并重新注册服务 → 无论如何最后确保服务在运行。结果写入 `update\result.json`，服务下次启动时报告。
 - 客户端更新：启动时检查；更新时以管理员权限静默运行安装包后退出，安装完成后经 explorer.exe 以普通用户身份重新打开。便携版只打开发布页。
+
+### 14.9 Android 客户端
+- 独立仓库 `android/`（GitHub `NyaRemoteControl-android`），单独发版。界面是 Kotlin + Jetpack Compose；协议部分是 Rust 核心 `libnya_android.so`（JNI），直接使用 common 的 nya-proto、nya-transport、nya-jitter，和 Windows 客户端同一套协议代码。Gradle 构建时用 cargo-ndk 编译核心（arm64-v8a、x86_64）。
+- 分工：核心负责连接、握手、配对、两分钟内自动重连、视频数据报还原、丢帧后等关键帧（并请求）、统计、文件收发；Kotlin 线程以阻塞调用拉取事件（JSON）、视频帧、音频包，输入直接推送。核心只声明它实现的功能：声音、本地光标、剪贴板文字、静止细化、Ctrl+Alt+Del、虚拟显示器、多画面前缀、多客户端、视频数据报、文件传输、手柄、文字输入。
+- 视频：MediaCodec 硬件解码直接输出到 SurfaceView，开低延迟参数和各厂商的低延迟开关（不认识时去掉重试），解码出一帧立即显示。只上报硬件解码器（模拟器上允许软件 H.264）。
+- 分辨率：默认在被控端建一块和手机屏幕一样大的虚拟屏（横屏物理像素，缩放默认 150%），也可选不超过 1080p 或被控端原分辨率；被控端没有虚拟显示器时自动用物理显示器。画面可以双指缩放、平移，软键盘弹出时可把画面下部推到键盘上方。
+- 操作：触屏式（点哪里操作哪里：单击、长按右键、长按拖动、单指滚动、三指键盘）和鼠标式（触控板：相对移动光标、双指滚动、双指轻按右键），双指捏合缩放画面；连接时显示手势指引。悬浮球打开侧边面板（操作方式、键盘、快捷键、办公 / 游戏模式、统计、剪贴板、发送文件、接管、断开）。实体键盘、鼠标、手柄（最多 4 个，震动回传）可直接使用。
+- 键盘：被控端支持文字输入时，用手机自己的输入法（中文、联想），提交的文字以 `InputMsg.text` 发送，换行和 Tab 作为按键；组合键（Ctrl+C 等）和不支持文字输入的旧被控端走美式键盘扫描码。键盘上方有附加键栏，Ctrl / Alt / Shift / Win 锁定到下一个键。
+- 声音：MediaCodec 解 Opus，PCM 进核心的自适应抖动缓冲（与 Windows 相同），浮点 AudioTrack 低延迟播放，设备里保持约 20 ms。
+- 文件：手机选文件（系统文件选择器）后由核心经文件流发送；被控端复制文件时手机提示"保存到手机"，收到后存入 `下载/NyaRemoteControl`。
+- 签名与发布：密钥由 `scripts/new-android-keystore.ps1` 生成在仓库外的 `signing/`，写入仓库的 Actions secrets；推送 `v*` 标签构建签名 APK 发布到 Releases。CI 在每次推送时跑 Rust 测试（含假被控端回环测试：配对、推流、关键帧请求、文字输入、双向文件）、Kotlin 单元测试、lint，并产出 debug APK。
+- 未做：HDR、麦克风、USB、文件夹挂载、打印、剪贴板图片 / 文件、多画面窗口、应用内自动更新。
