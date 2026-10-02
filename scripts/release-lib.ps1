@@ -1,10 +1,10 @@
-# Helpers shared by the server and client release scripts (dot-source it):
+# Helpers for the release scripts of the windows repository (dot-source it):
 #   . (Join-Path $PSScriptRoot '..\..\common\scripts\release-lib.ps1')
 #
-# Versions: each released repository (server, client) has its own VERSION file
-# (MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE) and is tagged v<VERSION>.
-# The Cargo.toml package versions must match it (Test-NyaVersion checks,
-# Set-NyaVersion writes). Server and client are versioned independently.
+# Versions: the released repository has a VERSION file (MAJOR.MINOR.PATCH or
+# MAJOR.MINOR.PATCH-PRERELEASE) and is tagged v<VERSION>. The Cargo.toml
+# package versions must match it (Test-NyaVersion checks, Set-NyaVersion
+# writes). The Android app (android repository) is versioned on its own.
 # Runs on Windows PowerShell 5.1 and PowerShell 7.
 
 $ErrorActionPreference = 'Stop'
@@ -75,7 +75,7 @@ function Write-Sha256([string]$Path) {
 }
 
 # Third-party pieces the build and the packages need, fetched when missing
-# (into <workspace>\third_party, next to common / server / client).
+# (into <workspace>\third_party, next to common / windows).
 function Initialize-NyaThirdParty([switch]$Vigem) {
     $common = Resolve-Path (Join-Path $PSScriptRoot '..')
     $tp = Join-Path $common '..\third_party'

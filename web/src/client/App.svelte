@@ -7,44 +7,88 @@
   import Settings from './Settings.svelte';
   import About from './About.svelte';
   import Dialogs from './Dialogs.svelte';
+  import Host from '../host/Host.svelte';
+  import * as host from '../host/ipc';
+  import type { Snapshot } from '../host/types';
   import type { ClientState, Local, Phase } from './types';
 
   let cs = $state<ClientState | null>(null);
   let loadError = $state('');
-  let page = $state<'devices' | 'settings' | 'about'>('devices');
+  /** Remote control: devices, settings, about; this computer: host, host-<sub-page>. */
+  let page = $state('devices');
   let phase = $state<Phase>({ phase: 'idle' });
   let local = $state<Local>(null);
   /** Host whose settings the settings page edits; null = the defaults. */
   let scope = $state<string | null>(null);
+  /** This computer as a host ("本机"). */
+  let snap = $state<Snapshot | null>(null);
+  let hostError = $state('');
 
   $effect(() => {
     call<ClientState>('state').then((s) => (cs = s)).catch((e) => (loadError = errorText(e)));
+    call<string | null>('start_page').then((p) => p && (page = p)).catch(() => {});
+    host.call<Snapshot>('snapshot').then((s) => (snap = s)).catch((e) => (hostError = errorText(e)));
     const offs = [
       on<ClientState>('state', (s) => (cs = s)),
       on<Phase>('connect', (p) => (phase = p)),
       on<{ kind: 'info' | 'ok' | 'error'; text: string }>('notice', (n) => toast(n.text, n.kind)),
+      host.on<Snapshot>('snapshot', (s) => (snap = s)),
     ];
     return () => offs.forEach((f) => f());
   });
 
-  const nav = [
+  const remote = [
     { id: 'devices', icon: 'monitor', label: '设备' },
     { id: 'settings', icon: 'sliders', label: '连接设置' },
-    { id: 'about', icon: 'info', label: '关于与诊断' },
   ] as const;
+  const mine = [
+    { id: 'host', icon: 'home', label: '概览' },
+    { id: 'host-clients', icon: 'users', label: '已配对客户端' },
+    { id: 'host-settings', icon: 'sliders', label: '被控设置' },
+    { id: 'host-components', icon: 'puzzle', label: '可选组件' },
+    { id: 'host-diag', icon: 'activity', label: '被控诊断' },
+    { id: 'host-logs', icon: 'doc', label: '服务日志' },
+  ] as const;
+  const svcShort = { running: '允许远程控制', stopped: '服务已停止', pending: '服务切换中', not_installed: '未开启远程控制', unknown: '服务状态未知' };
+
+  /** Sub-pages of 本机 need admin rights and the service installed. */
+  const hostLocked = (id: string) => id !== 'host' && (!snap?.elevated || snap.svc === 'not_installed');
+  const hostPage = $derived(page === 'host' ? 'overview' : page.slice('host-'.length));
+  // Remote control turned off (or not elevated): back to the overview.
+  $effect(() => {
+    if (snap && page.startsWith('host-') && hostLocked(page)) page = 'host';
+  });
 </script>
 
 <div class="shell">
   <nav class="side">
     <div class="brand"><span class="logo">N</span><span class="name">NyaRemoteControl<small>远程桌面</small></span></div>
-    {#each nav as n (n.id)}
+    <div class="group">远程控制</div>
+    {#each remote as n (n.id)}
       <button class="nav" class:on={page === n.id} onclick={() => ((page = n.id), n.id === 'settings' && (scope = null))}><Icon name={n.icon} /><span class="label">{n.label}</span></button>
     {/each}
+    <div class="group">本机</div>
+    {#each mine as n (n.id)}
+      <button class="nav" class:on={page === n.id} onclick={() => (page = n.id)} disabled={hostLocked(n.id)}><Icon name={n.icon} /><span class="label">{n.label}</span></button>
+    {/each}
     <div class="grow"></div>
-    {#if cs}<div class="me"><b>本机 {cs.computer}</b>{cs.decode}</div>{/if}
+    <button class="nav" class:on={page === 'about'} onclick={() => (page = 'about')}><Icon name="info" /><span class="label">关于与诊断</span></button>
+    {#if cs}
+      <div class="me">
+        <b>本机 {cs.computer}</b>
+        {#if snap}<span class="svc"><span class="dot" class:ok={snap.svc === 'running'} class:warn={snap.svc === 'stopped'}></span>{svcShort[snap.svc]}</span>{/if}
+        {cs.decode}
+      </div>
+    {/if}
   </nav>
   <main class="main">
-    {#if cs}
+    {#if page.startsWith('host')}
+      {#if snap}
+        <Host {snap} page={hostPage} />
+      {:else if hostError}
+        <div class="banner err"><Icon name="alert" />{hostError}</div>
+      {/if}
+    {:else if cs}
       {#if page === 'devices'}
         <Devices
           {cs}
@@ -68,3 +112,11 @@
 
 <Dialogs {phase} bind:local onstate={(s) => (cs = s)} />
 <Toasts />
+
+<style>
+  .group { padding: 12px 10px 4px; font-size: 11.5px; color: var(--text-3); font-weight: 600; letter-spacing: 0.5px; }
+  .brand + .group { padding-top: 0; }
+  .svc { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+  .nav:disabled { opacity: 0.45; cursor: default; }
+  @media (max-width: 720px) { .group { display: none; } }
+</style>

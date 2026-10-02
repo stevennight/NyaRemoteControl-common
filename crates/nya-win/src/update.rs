@@ -12,8 +12,10 @@ use serde::Deserialize;
 
 use crate::package;
 
-pub const SERVER_REPO: &str = "stevennight/NyaRemoteControl-server";
-pub const CLIENT_REPO: &str = "stevennight/NyaRemoteControl-client";
+/// NyaRemoteControl for Windows (the program and the host service are one
+/// product). It used to be NyaRemoteControl-server, which GitHub redirects
+/// here, so hosts from before the merge still find the new releases.
+pub const WINDOWS_REPO: &str = "stevennight/NyaRemoteControl-windows";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
@@ -221,7 +223,7 @@ mod tests {
     #[test]
     #[ignore]
     fn live_latest_release() {
-        for repo in [SERVER_REPO, CLIENT_REPO] {
+        for repo in [WINDOWS_REPO] {
             let r = latest(repo).unwrap();
             println!("{repo}: {} {} ({} bytes)", r.version, r.installer.name, r.installer.size);
             let sha = package::fetch(&r.sha256.url, 4096).unwrap();

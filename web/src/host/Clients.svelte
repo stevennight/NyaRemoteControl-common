@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
   import Modal from '../lib/Modal.svelte';
-  import { call, errorText } from '../lib/ipc';
+  import { call, errorText } from './ipc';
   import { toast } from '../lib/notify.svelte';
   import type { Snapshot } from './types';
 

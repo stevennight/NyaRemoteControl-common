@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "NyaRemoteControl pages shown in WebView2: client launcher (client.html) and host manager (manager.html)",
+  "description": "NyaRemoteControl main page shown in WebView2 (client.html): remote control and this computer as a host",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

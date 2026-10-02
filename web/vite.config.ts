@@ -1,9 +1,9 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
-// Two pages, embedded into the executables by crates/nya-webui:
-//   client.html  – nya-client launcher
-//   manager.html – nya-server (host manager)
+// The main page of NyaRemoteControl.exe (windows repository), embedded by
+// crates/nya-webui: remote control of other computers (src/client) and this
+// computer as a host (src/host, the "本机" section).
 export default defineConfig({
   plugins: [svelte()],
   base: './',
@@ -12,7 +12,7 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'chrome110', // WebView2 (Chromium) only
     rollupOptions: {
-      input: { client: 'client.html', manager: 'manager.html' },
+      input: { client: 'client.html' },
     },
   },
   server: { port: 5173, strictPort: true },

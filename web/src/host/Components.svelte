@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
-  import { call, on, errorText } from '../lib/ipc';
+  import { call, on, errorText } from './ipc';
   import { toast } from '../lib/notify.svelte';
   import type { Component, Install } from './types';
 

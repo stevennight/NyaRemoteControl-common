@@ -1,6 +1,7 @@
 // Sample backend for working on the page in a normal browser.
 import type { Mock } from '../lib/ipc';
 import type { ClientState } from './types';
+import { mock as hostMock } from '../host/mock';
 
 const now = Math.floor(Date.now() / 1000);
 const state: ClientState = {
@@ -9,7 +10,7 @@ const state: ClientState = {
   client_name: '',
   computer_name: 'DESKTOP-DEV',
   check_updates: true,
-  update: { state: 'available', current: '0.2.0', latest: '0.2.1', notes: '- 修复：……\n- 新增：自动更新', page: 'https://github.com/stevennight/NyaRemoteControl-client/releases/tag/v0.2.1', progress: 0, message: '', checked_unix: now - 60 },
+  update: { state: 'available', current: '0.2.0', latest: '0.2.1', notes: '- 修复：……\n- 新增：自动更新', page: 'https://github.com/stevennight/NyaRemoteControl-windows/releases/tag/v0.7.1', progress: 0, message: '', checked_unix: now - 60 },
   decode: '硬件解码：不可用（软件解码）',
   hosts: [
     { name: '公司台式机', address: 'frp.dev.nyatori.com', paired: true, last_connected: now - 600, server_name: 'DESKTOP-GTX1650', custom_name: true, settings: null },
@@ -30,8 +31,13 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const clone = () => structuredClone(state);
 
 export const mock: Mock = async (cmd, args, emit) => {
+  if (cmd.startsWith('host.')) return hostMock(cmd.slice(5), args, (event, data) => emit(`host.${event}`, data));
   await wait(120);
   switch (cmd) {
+    case 'start_page':
+      return new URLSearchParams(location.search).get('page');
+    case 'relaunch_elevated':
+      return null;
     case 'state':
       return clone();
     case 'connect': {

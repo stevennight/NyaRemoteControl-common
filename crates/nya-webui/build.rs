@@ -48,7 +48,7 @@ fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let web = manifest.join("../../web").canonicalize().expect("common/web not found");
     let dist = web.join("dist");
-    for f in ["src", "client.html", "manager.html", "package.json", "vite.config.ts", "dist"] {
+    for f in ["src", "client.html", "package.json", "vite.config.ts", "dist"] {
         println!("cargo:rerun-if-changed={}", web.join(f).display());
     }
     println!("cargo:rerun-if-env-changed=NYA_WEB_PREBUILT");

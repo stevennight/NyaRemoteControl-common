@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
   import Seg from '../lib/Seg.svelte';
-  import { call, errorText } from '../lib/ipc';
+  import { call, errorText } from './ipc';
   import { tick } from 'svelte';
 
   let name = $state('service');

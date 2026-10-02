@@ -1,5 +1,4 @@
-// Shapes exchanged with nya-server.exe (server/manager/src/gui.rs).
-import type { UpdateInfo } from '../lib/UpdateCard.svelte';
+// Shapes exchanged with the "本机" model (windows repo: app/src/app/host.rs).
 
 export type Config = {
   port: number;
@@ -45,8 +44,6 @@ export type Snapshot = {
   load_error: string | null;
   busy: string | null;
   log_dir: string;
-  /** From the service (it checks itself), or from this program's own check. */
-  update: UpdateInfo | null;
 };
 
 export type Component = {

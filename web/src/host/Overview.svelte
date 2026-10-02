@@ -1,12 +1,11 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte';
   import Modal from '../lib/Modal.svelte';
-  import UpdateCard from '../lib/UpdateCard.svelte';
-  import { call, errorText } from '../lib/ipc';
+  import { call, errorText } from './ipc';
   import { toast } from '../lib/notify.svelte';
   import { since, time, type Snapshot } from './types';
 
-  let { snap }: { snap: Snapshot } = $props();
+  let { snap, onelevate }: { snap: Snapshot; onelevate: () => void } = $props();
   let confirmReset = $state(false);
 
   const svcText = { running: '运行中', stopped: '已停止', pending: '正在切换…', not_installed: '未安装', unknown: '未知' };
@@ -33,21 +32,23 @@
     navigator.clipboard.writeText(text).then(() => toast(`已复制${what}`, 'ok'));
   }
 
-  let confirmUpdate = $state(false);
-  // Without a service that checks by itself: check once when the page opens.
-  let checkedOnce = false;
-  $effect(() => {
-    if (!checkedOnce && snap.elevated && snap.config.check_updates && !snap.update && !snap.busy) {
-      checkedOnce = true;
-      call('update_check').catch(() => {});
-    }
-  });
-
   const session = $derived(snap.status?.session ?? null);
   const stream = $derived(snap.status?.host?.stream ?? '');
 </script>
 
-<div class="head"><h2>概览</h2></div>
+<div class="head"><h2>本机</h2><span class="sub">{snap.computer}</span></div>
+
+{#if snap.svc === 'not_installed'}
+  <div class="card panel hero">
+    <div class="big"><Icon name="power" size={22} /></div>
+    <div class="grow">
+      <b>允许别人远程控制这台电脑</b>
+      <span>开启后在后台安装 NyaRemoteControl 服务：开机自启，锁屏、登录界面和 UAC 弹窗也能操作。客户端第一次连接时需要输入本机的配对码。不需要时可以随时在“被控设置”里关闭。</span>
+    </div>
+    <button class="btn primary" onclick={() => run('enable')} disabled={!!snap.busy}><Icon name="power" size={16} />开启远程控制</button>
+  </div>
+  <div class="muted small">只用来控制别的电脑时不需要开启。{snap.elevated ? '' : '开启时会请求管理员权限。'}</div>
+{:else}
 
 {#if snap.points_here === false}
   <div class="banner warn">
@@ -66,8 +67,8 @@
     <h4>
       服务
       <span class="r">
-        {#if snap.svc === 'not_installed'}
-          <button class="btn sm primary" onclick={() => run('svc', { action: 'install' })} disabled={!!snap.busy}>安装服务</button>
+        {#if !snap.elevated}
+          <!-- Starting / stopping needs admin rights (banner above). -->
         {:else if snap.svc === 'stopped'}
           <button class="btn sm primary" onclick={() => run('svc', { action: 'start' })} disabled={!!snap.busy}><Icon name="play" size={14} />启动</button>
         {:else if snap.svc === 'running'}
@@ -77,15 +78,13 @@
       </span>
     </h4>
     <div class="status">
-      <div class="big {snap.svc}"><Icon name={snap.svc === 'running' ? 'check' : snap.svc === 'not_installed' ? 'power' : 'alert'} size={22} /></div>
+      <div class="big {snap.svc}"><Icon name={snap.svc === 'running' ? 'check' : 'alert'} size={22} /></div>
       <div>
         <b>{svcText[snap.svc]}</b>
         <span>
           {#if snap.status}
             {snap.status.listen ? `监听 UDP ${snap.status.listen}` : '没有在监听'} ·
             {snap.status.host?.running ? `采集进程运行中（会话 ${snap.status.host.console_session}）` : '采集进程未运行'} · 版本 {snap.status.server_version}
-          {:else if snap.svc === 'not_installed'}
-            安装后开机自启，可以操作锁屏、登录界面和 UAC 弹窗
           {:else}
             端口 UDP {snap.config.port}
           {/if}
@@ -97,15 +96,22 @@
   <div class="card panel">
     <h4>
       配对码
-      <span class="r">
-        <button class="btn sm ghost" onclick={() => (confirmReset = true)}><Icon name="refresh" size={14} />重新生成</button>
-      </span>
+      {#if snap.elevated}
+        <span class="r">
+          <button class="btn sm ghost" onclick={() => (confirmReset = true)}><Icon name="refresh" size={14} />重新生成</button>
+        </span>
+      {/if}
     </h4>
-    <div class="pair">
-      <span class="code selectable">{snap.code || '—'}</span>
-      <button class="btn icon" aria-label="复制配对码" onclick={() => copy(snap.code, '配对码')} disabled={!snap.code}><Icon name="copy" /></button>
-    </div>
-    <div class="hint">客户端第一次连接时输入；已配对的客户端之后不再需要。</div>
+    {#if snap.elevated}
+      <div class="pair">
+        <span class="code selectable">{snap.code || '—'}</span>
+        <button class="btn icon" aria-label="复制配对码" onclick={() => copy(snap.code, '配对码')} disabled={!snap.code}><Icon name="copy" /></button>
+      </div>
+      <div class="hint">客户端第一次连接时输入；已配对的客户端之后不再需要。</div>
+    {:else}
+      <div class="pair"><button class="btn" onclick={onelevate}><Icon name="shield" size={16} />以管理员身份查看</button></div>
+      <div class="hint">配对码可以让别人控制这台电脑，只有管理员能查看。</div>
+    {/if}
   </div>
 </div>
 
@@ -118,7 +124,9 @@
         <b>{session.client_name} <span class="chip ok">正在操作</span></b>
         <span>来自 {session.remote_addr} · {since(session.since_unix)} · 客户端 {session.client_version}</span>
       </div>
-      <button class="btn danger" onclick={() => run('disconnect')}>{snap.status?.viewers?.length ? '全部断开' : '断开'}</button>
+      {#if snap.elevated}
+        <button class="btn danger" onclick={() => run('disconnect')}>{snap.status?.viewers?.length ? '全部断开' : '断开'}</button>
+      {/if}
     </div>
     {#each snap.status?.viewers ?? [] as v (v.remote_addr + v.since_unix)}
       <div class="conn">
@@ -137,35 +145,13 @@
   {/if}
 </div>
 
-<UpdateCard
-  info={snap.update}
-  current={snap.version}
-  note={snap.svc === 'running' && snap.live
-    ? '更新时服务会自动停止、安装并重启（约 1 分钟），正在进行的远程连接会断开并自动重连；新版本没能正常启动时自动恢复旧版本。'
-    : '将下载并打开安装程序。'}
-  oncheck={() => run('update_check')}
-  oninstall={() => (confirmUpdate = true)}
-/>
-
-{#if confirmUpdate}
-  <Modal title="安装更新" onclose={() => (confirmUpdate = false)}>
-    <p>更新到 {snap.update?.latest}？</p>
-    <p class="muted small">
-      {#if session}当前有客户端（{session.client_name}）连接着，更新期间会断开约 1 分钟，客户端会自动重连。{/if}
-      服务会在新版本安装后自动重启；如果新版本没能启动，会自动恢复到 {snap.update?.current}。
-    </p>
-    {#snippet footer()}
-      <button class="btn ghost" onclick={() => (confirmUpdate = false)}>取消</button>
-      <button class="btn primary" onclick={() => ((confirmUpdate = false), run('update_apply'))}>更新</button>
-    {/snippet}
-  </Modal>
-{/if}
-
+{#if snap.elevated}
 <div class="card panel">
   <h4>证书指纹<span class="r"><button class="btn sm ghost" onclick={() => copy(snap.fingerprint, '指纹')} disabled={!snap.fingerprint}><Icon name="copy" size={14} />复制</button></span></h4>
   <div class="mono selectable fp">{snap.fingerprint || '—'}</div>
   <div class="hint">客户端提示“证书已变化”或要求核对指纹时，用这里对照。</div>
 </div>
+{/if}
 
 <div class="card panel">
   <h4>最近事件</h4>
@@ -176,9 +162,10 @@
       {/each}
     </ul>
   {:else}
-    <div class="muted small">{snap.live ? '暂无' : '服务运行后显示（更早的记录见“日志”）'}</div>
+    <div class="muted small">{snap.live ? '暂无' : '服务运行后显示（更早的记录见“服务日志”）'}</div>
   {/if}
 </div>
+{/if}
 
 {#if confirmReset}
   <Modal title="重新生成配对码" onclose={() => (confirmReset = false)}>
@@ -191,6 +178,11 @@
 {/if}
 
 <style>
+  .hero { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+  .hero .grow { flex: 1; min-width: 0; }
+  .hero b { display: block; font-size: 16px; margin-bottom: 4px; }
+  .hero span { color: var(--text-3); font-size: 12.5px; }
+  .hero .big { background: var(--accent-soft); color: var(--accent-text); }
   .kpis { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; margin-bottom: 14px; }
   .card.panel { padding: 16px 18px; margin-bottom: 14px; }
   .kpis .card.panel { margin-bottom: 0; }

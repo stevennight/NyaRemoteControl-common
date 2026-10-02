@@ -194,7 +194,6 @@ mod tests {
     #[test]
     fn pages_are_embedded() {
         assert!(asset("client.html").is_some());
-        assert!(asset("manager.html").is_some());
         assert_eq!(mime("assets/a.js"), "text/javascript; charset=utf-8");
     }
 }

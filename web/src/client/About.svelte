@@ -53,7 +53,7 @@
 <div class="set">
   <div class="card group">
     <h3>本机</h3>
-    <div class="field"><div class="text"><b>NyaRemoteControl 客户端</b><span>版本 {cs.version}</span></div></div>
+    <div class="field"><div class="text"><b>NyaRemoteControl</b><span>版本 {cs.version}</span></div></div>
     <div class="field">
       <div class="text"><b>本机名称</b><span>被控端的“已配对客户端”和连接记录里显示这个名字。留空则用计算机名 {cs.computer_name}</span></div>
       <form class="ctl" onsubmit={saveName}>
@@ -67,7 +67,7 @@
   <UpdateCard
     info={cs.update}
     current={cs.version}
-    note="下载后会请求一次管理员权限，然后客户端关闭、安装并自动重新打开；正在进行的远程连接会断开。"
+    note="下载后会请求一次管理员权限，然后程序关闭、安装并自动重新打开；正在进行的远程连接会断开，开启了远程控制时服务会重启约 1 分钟。"
     oncheck={() => call('update_check').catch((e) => toast(errorText(e), 'error'))}
     oninstall={() => call('update_apply').catch((e) => toast(errorText(e), 'error'))}
   />

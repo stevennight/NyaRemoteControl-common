@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | v0.4：第一阶段（M0–M7）和大部分第二、三阶段功能已实现；实机验证情况见 §13。v0.2：协议兼容、多显卡与笔记本；v0.3：按实现修订 §2、§5、§6；v0.4：按 09-27 之后的实现全面修订（见下方"调整摘要"和 §14） |
+| 状态 | v0.5：Windows 客户端与被控端合并为一个产品（§1.3、§2）。v0.4：第一阶段（M0–M7）和大部分第二、三阶段功能已实现；实机验证情况见 §13。v0.2：协议兼容、多显卡与笔记本；v0.3：按实现修订 §2、§5、§6；v0.4：按 09-27 之后的实现全面修订（见下方"调整摘要"和 §14） |
 | 日期 | 2026-10-02 |
 | 范围 | 整体架构 + 第一阶段（Windows ↔ Windows 可用版）详细设计；之后新增的设计见 §14，剩余规划见 §12 |
 
@@ -11,7 +11,8 @@
 | 最初方案 | 现在 | 原因 |
 |---|---|---|
 | 被控端一个 `nya-server.exe`（service / helper / standalone 子命令） | 本体 `nya-server-svc.exe` + 管理程序 `nya-server.exe`，通过控制管道通信（§1.3） | 管理界面开着时也能停服务、替换本体文件，为自动更新做准备 |
-| 一个 workspace 内含所有 crate | 三个仓库 common / server / client；server 自身是 workspace（§2） | server、client 独立发版 |
+| 一个 workspace 内含所有 crate | 仓库 common / windows / android；windows 是 workspace（§2）。0.7.0 之前 server、client 是两个仓库、两个安装包 | 0.7.0 起 Windows 版像向日葵 / ToDesk 一样只有一个程序：能控制别人，开启后也能被控制 |
+| 被控端、客户端各装一个程序 | 一个安装包、一个版本；主程序 `NyaRemoteControl.exe` 含“本机”页（原管理程序界面），远程控制服务默认不装，由用户开启（§1.3） | 只控制别人的电脑不该多一个 SYSTEM 服务；FFmpeg DLL 不用带两份 |
 | 不做多用户 | 同一被控端可连多个客户端：一人操作、其余观看，可接管或顶掉（§14.3） | 消费版 Windows 只有一个桌面会话，按"共享屏幕 + 明确接管"处理 |
 | 第一阶段不做 HDR | HDR 桌面按 FP16 截屏，在显卡上转换为 SDR 再编码（§3.6）；HDR 原样传输仍未做 | 开 HDR 的被控端原来画面发白 |
 | 远端分辨率跟随窗口放到第二阶段 | 已实现：虚拟显示器（VDD）跟随客户端窗口，另有隐私屏（§14.1） | |
@@ -54,7 +55,7 @@
 ```
 ┌──────────────────────────── 被控端 ────────────────────────────┐
 │                                                                │
-│  nya-server.exe   管理程序（界面 + 命令行，不链接 FFmpeg）     │
+│  NyaRemoteControl.exe“本机”页 / nya-server.exe 命令行         │
 │            ▲  控制管道 \\.\pipe\NyaRemoteControl.control       │
 │            ▼                                                   │
 │  nya-server-svc.exe service（Session 0，SYSTEM，Windows 服务） │
@@ -76,7 +77,7 @@
                          │  QUIC（UDP，TLS 1.3）
                          │  经由外部组网工具
 ┌──────────────────────── 客户端 ────────────────────────────────┐
-│  nya-client.exe                                                │
+│  NyaRemoteControl.exe（同一个程序，控制别人的部分）            │
 │   ├─ 界面：主界面（WebView2）+ 每个会话 / 每路画面一个窗口     │
 │   ├─ 网络：QUIC 连接、流分发；可同时连接多台被控端             │
 │   ├─ 视频：D3D11VA 硬件解码 → Shader 转 RGB → 翻转交换链呈现   │
@@ -101,22 +102,25 @@ service 与 helper 是**同一个可执行文件（`nya-server-svc.exe`）的不
 ### 1.2 开发模式
 开发阶段提供 `nya-server-svc.exe standalone`：单进程、普通用户权限、直接监听网络、不涉及服务与会话切换。里程碑 M1–M3 全部在此模式下完成，M4 再接入 service/helper。开发模式也提供控制管道（`NyaRemoteControl.control.standalone`）。
 
-### 1.3 管理程序与控制管道
-- 管理程序 `nya-server.exe` 只依赖 `nya-server-core`，**不链接 FFmpeg 和采集代码**，所以它开着时也能停服务、替换 `nya-server-svc.exe` 和 DLL。（同一 crate 出两个 bin 的做法行不通：MSVC 会保留任何被引用目标文件里的 FFmpeg 导入，FFmpeg 的 GNU 风格导入库又不支持 /DELAYLOAD，只能拆 crate。）
-- 控制管道 `\\.\pipe\NyaRemoteControl.control`：协议在 `server/core/proto/control.proto`，和网络协议一样只能新增字段（升级过程中两边可能版本不同）。SDDL 允许 SYSTEM 完全访问、管理员和交互用户读写；是否为管理员由服务端模拟客户端令牌判断，只有管理员能看配对码、改设置。
-- 设置通过管道修改时立即生效（必要时重启 helper、重新绑定端口并更新防火墙规则）；服务没运行时管理程序直接读写配置文件。
+### 1.3 一个程序、三个进程，控制管道
+- 0.7.0 起 Windows 版只有一个安装包：主程序 `NyaRemoteControl.exe`（控制别人 + “本机”页）、远程控制服务 `nya-server-svc.exe`、命令行 `nya-server.exe`，共用一份 FFmpeg DLL。进程仍然分开：主程序关着服务照样运行，服务可以单独停止、替换。
+- 远程控制服务**默认不装**：安装包里“允许远程控制本机”默认不勾选，或在“本机”页点“开启远程控制”（不提权时通过 UAC 运行 `nya-server.exe install`）。已有服务的电脑升级时保持开启。
+- “本机”页（`windows/app/src/app/host.rs` + `web/src/host`）就是原来管理程序的界面。配对码、设置、已配对客户端仍然只有管理员能看能改（配对等于交出 SYSTEM 级的控制）：普通权限下只显示服务状态和当前连接，可以“以管理员身份重新打开”主程序（`--page host`；有远程连接时不允许）。
+- 命令行 `nya-server.exe` 只依赖 `nya-server-core`，**不链接 FFmpeg 和采集代码**：服务更新时把它复制出去当更新程序（`nya-updater.exe`），在替换程序文件期间运行。（同一 crate 出两个 bin 的做法行不通：MSVC 会保留任何被引用目标文件里的 FFmpeg 导入，FFmpeg 的 GNU 风格导入库又不支持 /DELAYLOAD，只能拆 crate。）主程序要解码，会锁住 FFmpeg DLL，所以安装包升级时先关闭它；服务发起的更新以 SYSTEM 运行，之后不会重新打开主程序。
+- 从 0.7 以前升级：GitHub 上 NyaRemoteControl-server 改名为 NyaRemoteControl-windows（旧版服务查更新时 GitHub 会重定向），client 仓库发一个过渡版本后归档。安装包识别旧的 Client、Server 安装（卸载项 `NyaRemoteControl.Client` / `.Server`），删除旧文件和快捷方式、把服务改到新目录；旧版服务的更新程序传入 `/D=<旧 Server 目录>` 时改装到新目录。
+- 控制管道 `\\.\pipe\NyaRemoteControl.control`：协议在 `windows/core/proto/control.proto`，和网络协议一样只能新增字段（升级过程中两边可能版本不同）。SDDL 允许 SYSTEM 完全访问、管理员和交互用户读写；是否为管理员由服务端模拟客户端令牌判断，只有管理员能看配对码、改设置。
+- 设置通过管道修改时立即生效（必要时重启 helper、重新绑定端口并更新防火墙规则）；服务没运行时主程序 / 命令行直接读写配置文件。
 
 ---
 
 ## 2. 代码仓库结构
 
-四个独立仓库放在同级目录，共享一个 `target/`；FFmpeg 等第三方文件放在不属于任何仓库的 `third_party/`。server、client、android 各自发版，发布时用 `COMMON_REF` 文件固定所用的 common 提交：
+三个独立仓库放在同级目录，共享一个 `target/`；FFmpeg 等第三方文件放在不属于任何仓库的 `third_party/`。windows、android 各自发版，发布时用 `COMMON_REF` 文件固定所用的 common 提交：
 
 ```
 NyaRemoteControl/
 ├─ common/   仓库：公共 crate、Web 界面、脚本与本文档
-├─ server/   仓库：被控端（Cargo workspace，见下）
-├─ client/   仓库：nya-client（Windows 客户端）
+├─ windows/  仓库：Windows 版（Cargo workspace，见下；0.7.0 由 server、client 合并）
 ├─ android/  仓库：Android 客户端（Kotlin 界面 + Rust 核心，§14.9）
 ├─ signing/  不属于任何仓库：Android 发版签名密钥（备份到密码管理器）
 └─ third_party/   FFmpeg 8.1 LGPL 预编译包、ViGEmClient 源码、可选组件安装包
@@ -139,20 +143,19 @@ common/
 │  │                    SendInput、WASAPI、桌面切换、CCD 显示配置、设备节点、剪贴板（含 OLE 虚拟文件）
 │  ├─ nya-ui/           egui on D3D11（会话工具条、统计面板），带中文字体
 │  └─ nya-webui/        wry/WebView2 宿主：nya:// 协议嵌入页面、JSON 调用与事件桥
-├─ web/                 Vite + Svelte 5 + TS：client.html（客户端主界面）、manager.html（被控端管理界面）
-├─ scripts/             fetch-*.ps1、release-lib.ps1（两边发版脚本共用）
+├─ web/                 Vite + Svelte 5 + TS：client.html（Windows 主程序界面；src/host 是“本机”部分）
+├─ scripts/             fetch-*.ps1、release-lib.ps1（windows 的发版脚本用）
 └─ docs/design/         本文档、界面设计稿 ui-redesign.html
 ```
 
-server 仓库是一个 workspace：
+windows 仓库是一个 workspace，一个版本号（`VERSION`）、一个安装包：
 
 | 目录 | 包 | 产物 |
 |---|---|---|
-| `.` | `nya-server` | 本体 `nya-server-svc.exe`：service、helper、standalone、diag、vdd-test、apply-update |
-| `core/` | `nya-server-core` | 两个程序共用：配置、配对数据、路径、日志、安装、可选组件、控制管道协议与客户端、更新程序 |
-| `manager/` | `nya-server-manager` | 管理程序 `nya-server.exe`：界面（manager.html）+ 命令行；只依赖 core |
-
-client 仓库：单个 crate `nya-client`，`src/app/` 下是窗口逻辑（launcher 主界面、conn 多会话、extra 额外画面窗口、update 自动更新）。
+| `app/` | `nya-app` | 主程序 `NyaRemoteControl.exe`：`src/app/` 下是窗口逻辑（launcher 主界面、host“本机”页、conn 多会话、extra 额外画面窗口、update 自动更新）；依赖 core，不依赖 host |
+| `host/` | `nya-server` | 远程控制服务 `nya-server-svc.exe`：service、helper、standalone、diag、vdd-test |
+| `core/` | `nya-server-core` | 共用的被控端部分：配置、配对数据、路径、日志、安装、可选组件、控制管道协议与客户端、更新程序 |
+| `cli/` | `nya-server-cli` | 命令行 `nya-server.exe`（也是更新程序）；只依赖 core |
 
 ### 2.1 主要依赖
 
@@ -165,8 +168,8 @@ client 仓库：单个 crate `nya-client`，`src/app/` 下是窗口逻辑（laun
 | 视频编解码 | 自带的 `nya-ffmpeg-sys`（FFmpeg 8.1 预生成绑定，链接共享库） | 编码：`*_nvenc`、`*_qsv`、`*_amf`、`libopenh264`；解码：`d3d11va` + 软件回退 |
 | 音频编解码 | FFmpeg 内置的 libopus | 48 kHz 立体声，不另外引入库 |
 | 窗口 | `winit` | 客户端窗口与事件循环；渲染直接用 D3D11 交换链 |
-| 界面 | `wry`（WebView2）+ Svelte 5；`egui` | 客户端主界面和被控端管理界面是网页（构建时 npm 打包后嵌入 exe）；会话工具条和统计面板用 egui 画在远程窗口上 |
-| 安装包 | NSIS | 被控端、客户端各一个安装包 + 便携 zip，GitHub Actions 按 tag 构建发布 |
+| 界面 | `wry`（WebView2）+ Svelte 5；`egui` | 主界面（含“本机”页）是网页（构建时 npm 打包后嵌入 exe）；会话工具条和统计面板用 egui 画在远程窗口上 |
+| 安装包 | NSIS | 一个安装包（远程控制服务为可选组件）+ 便携 zip，GitHub Actions 按 tag 构建发布 |
 | 日志 | `tracing` + `tracing-appender` | 文件日志、按天滚动 |
 | 配置 | `toml` + `serde` | 仅用于本地配置文件，不用于网络协议 |
 | 错误处理 | `anyhow`（bin）/ `thiserror`（lib） | |
@@ -380,7 +383,7 @@ T2 的做法：采集 GPU 上把转换好的帧拷进一张与 D3D12 共享的�
 - **每条单向流开头先写一个 varint"流类型"**；数据报第一个字节是"数据报类型"。收到不认识的类型时：流直接 `STOP_SENDING`，数据报直接丢弃。这样新版本可以增加通道而不影响旧版本。
 - 视频默认按会话一条流、按序可靠：编码后的帧不丢弃，流控靠"已交给 QUIC 的帧确认"（FrameSent，最多 2 帧在途），拥塞时在采集端少编帧而不是丢帧，避免参考帧断裂。代价是丢一个包要等重传（至少一个 RTT），后面的帧都跟着卡。游戏模式默认改走数据报 + 纠错（§6.5）。
 - MTU：初始 1200，开启 PMTU 探测；组网环境下（1280）也能正常工作。
-- 拥塞控制：quinn 默认算法 + 应用层**码率自适应**（已实现，`server/src/abr.rs`）。主要信号是**积压**：已交给 QUIC 但还没发出去的视频字节。积压持续增长说明产出多于链路能承载，此时按实测发送速率设定新码率，而不是盲目按比例下调。RTT 增长和丢包在中转 / 代理路径上噪声很大，只在更激进的策略中使用。客户端可选策略：
+- 拥塞控制：quinn 默认算法 + 应用层**码率自适应**（已实现，`windows/host/src/abr.rs`）。主要信号是**积压**：已交给 QUIC 但还没发出去的视频字节。积压持续增长说明产出多于链路能承载，此时按实测发送速率设定新码率，而不是盲目按比例下调。RTT 增长和丢包在中转 / 代理路径上噪声很大，只在更激进的策略中使用。客户端可选策略：
 
 | 策略 | 触发条件 | 持续时间 | 码率下限 |
 |---|---|---|---|
@@ -692,7 +695,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 | | NVDEC 解码回退（需要客户端有 N 卡；现有客户端是云电脑，没有） |
 | | 跨显卡传输 T2（需要双显卡的被控端；现有被控端只有一块 GTX 1650） |
 | | HDR10 直通（被控端 GTX 1650 的 Main10 编码可用 `diag` 验证；客户端 HDR 显示需要 HDR 显示器，现有测试机没有） |
-| | 管理程序 + 控制管道（服务模式下的管道权限） |
+| | “本机”页 / 命令行 + 控制管道（服务模式下的管道权限） |
 | | 安装包升级、自动更新与回滚（R11；0.2.0 安装的被控端没有更新程序，第一次需手动升级） |
 | | QSV、AMF、跨显卡传输（需要对应硬件） |
 | | Android 客户端全部功能（§14.9；开发机没有模拟器）；USB 透传为自写的 USB/IP 服务端，最需要实测 |
@@ -704,7 +707,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 实机验证步骤：
 
 1. 被控端运行 `nya-server diag`，把 `nya-diag.txt` 发回来；
-2. 用 `nya-server-svc standalone` 加 `nya-client connect <ip>` 验证画面、键鼠、声音；
+2. 用 `nya-server-svc standalone` 加 `NyaRemoteControl connect <ip>` 验证画面、键鼠、声音；
 3. 用安装包（或 `nya-server install`）安装服务，验证锁屏、注销、UAC 和 Ctrl+Alt+Del；
 4. 虚拟显示器问题用 `nya-server-svc vdd-test --driver-log`（管理员）收集信息。
 
@@ -725,7 +728,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 
 ### 14.3 多客户端
 - `FEATURE_MULTI_CLIENT`：第一个连上的客户端操作，之后的客户端观看（只收主画面 slot 0，键鼠、剪贴板、USB、显示设置都只听操作者的）。观看者可以"接管操作"（原操作者转为观看）或"顶掉对方"（原操作者断开）；操作者断开后最早的观看者自动接管。`SessionRole` 告诉每个客户端自己的角色、操作者和观看者名单。
-- 服务端新增"影响被控端"的请求时必须检查操作者身份（`server/src/net.rs` 的 `in_control`）。
+- 服务端新增"影响被控端"的请求时必须检查操作者身份（`windows/host/src/net.rs` 的 `in_control`）。
 - 画面的尺寸、虚拟屏、模式、编码偏好都按操作者的请求；接管时改按新操作者的（所以接管后画面会按新设备重建）。但编码格式（编码器、4:4:4、10 bit HDR）限定在所有已连接客户端都能解码的范围内（`hub::combine_caps`：操作者的解码能力与每个观看者取交集），观看者加入或离开时如果最佳格式变了就重建画面。
 - 观看者不拖慢被控端：发不出去的帧直接丢弃，但关键帧最多等 0.5 秒而不丢；丢过帧后到下一个关键帧之前的帧不再发送（反正解不了），同时每秒最多请求一次关键帧。
 - 不支持该功能的旧客户端连上时仍然顶掉所有人；同一客户端重连时替换自己的旧会话。

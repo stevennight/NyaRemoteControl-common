@@ -2,7 +2,7 @@
   import Seg from '../lib/Seg.svelte';
   import Switch from '../lib/Switch.svelte';
   import Modal from '../lib/Modal.svelte';
-  import { call, errorText } from '../lib/ipc';
+  import { call, errorText } from './ipc';
   import { toast } from '../lib/notify.svelte';
   import type { Config, Snapshot } from './types';
 
@@ -37,7 +37,7 @@
   }
 </script>
 
-<div class="head"><h2>设置</h2><span class="sub">{snap.live ? '保存后立即生效' : '服务没有运行：保存到配置文件，服务启动时生效'}</span></div>
+<div class="head"><h2>被控设置</h2><span class="sub">{snap.live ? '保存后立即生效' : '服务没有运行：保存到配置文件，服务启动时生效'}</span></div>
 
 <div class="set">
   <div class="card group">
@@ -93,7 +93,7 @@
   <div class="card group">
     <h3>更新</h3>
     <div class="field">
-      <div class="text"><b>自动检查新版本</b><span>每 12 小时查看一次 GitHub 上的新版本，在“概览”里提示；是否安装由你决定</span></div>
+      <div class="text"><b>服务自动检查新版本</b><span>服务每 12 小时查看一次 GitHub 上的新版本（nya-server status 可见）；安装请到“关于与诊断”</span></div>
       <Switch bind:checked={c.check_updates} label="自动检查新版本" />
     </div>
   </div>
@@ -120,18 +120,18 @@
       <button class="btn" onclick={() => svc('install')} disabled={!!snap.busy}>重新安装</button>
     </div>
     <div class="field">
-      <div class="text"><b>卸载服务</b><span>证书和配对信息会保留；彻底清除请用命令行 nya-server uninstall --purge</span></div>
-      <button class="btn danger" onclick={() => (confirmUninstall = true)} disabled={snap.svc === 'not_installed' || !!snap.busy}>卸载</button>
+      <div class="text"><b>关闭远程控制</b><span>卸载服务，这台电脑不再能被控制；证书和配对信息会保留（彻底清除请用命令行 nya-server uninstall --purge）</span></div>
+      <button class="btn danger" onclick={() => (confirmUninstall = true)} disabled={snap.svc === 'not_installed' || !!snap.busy}>关闭</button>
     </div>
   </div>
 </div>
 
 {#if confirmUninstall}
-  <Modal title="卸载服务" onclose={() => (confirmUninstall = false)}>
-    <p>卸载后这台电脑不能再被远程控制，直到重新安装服务。证书和配对信息会保留。</p>
+  <Modal title="关闭远程控制" onclose={() => (confirmUninstall = false)}>
+    <p>将卸载服务，这台电脑不能再被远程控制，直到在“本机 → 概览”里重新开启。证书和配对信息会保留。</p>
     {#snippet footer()}
       <button class="btn ghost" onclick={() => (confirmUninstall = false)}>取消</button>
-      <button class="btn danger-fill" onclick={() => { confirmUninstall = false; svc('uninstall'); }}>卸载</button>
+      <button class="btn danger-fill" onclick={() => { confirmUninstall = false; svc('uninstall'); }}>关闭</button>
     {/snippet}
   </Modal>
 {/if}
