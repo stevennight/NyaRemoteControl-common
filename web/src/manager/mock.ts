@@ -40,7 +40,7 @@ const snap: Snapshot = {
 
 const components: Component[] = [
   { id: 'vdd', name: '虚拟显示器', product: 'Virtual Display Driver 25.7.23', purpose: '在被控端新建显示器：分辨率跟随客户端窗口、多屏、隐私屏（本机显示器黑屏、本机键鼠屏蔽）。需要服务模式', status: '平时停用，有客户端需要时自动启用', installed: true, url: 'https://github.com/VirtualDrivers/Virtual-Display-Driver/releases', note: '免费开源；平时保持停用，不影响本机显示器' },
-  { id: 'cable', name: '虚拟声卡', product: 'VB-Cable', purpose: '把客户端麦克风送进被控端：客户端工具条打开“麦克风”，被控端软件选择“CABLE Output”作为麦克风', status: null, installed: false, url: 'https://vb-audio.com/Cable/', note: '捐赠软件（安装即表示同意 VB-Audio 许可），需联网从官网下载；安装后需要重启一次' },
+  { id: 'cable', name: '虚拟声卡', product: 'VB-Cable', purpose: '把客户端麦克风送进被控端：客户端工具条打开“麦克风”，打开期间“CABLE Output”自动成为被控端默认麦克风', status: null, installed: false, url: 'https://vb-audio.com/Cable/', note: '捐赠软件（安装即表示同意 VB-Audio 许可），需联网从官网下载；安装后需要重启一次' },
   { id: 'vigem', name: '手柄', product: 'ViGEmBus 1.22.0', purpose: '客户端的手柄在被控端显示为 Xbox 手柄', status: '驱动已加载', installed: true, url: 'https://github.com/nefarius/ViGEmBus/releases', note: '免费；作者已停止维护，但仍可用' },
   { id: 'usbip', name: 'USB 透传', product: 'usbip-win2 0.9.8.1', purpose: 'U 盾、加密狗等 USB 设备从客户端透传到被控端', status: null, installed: false, url: 'https://github.com/vadimgrn/usbip-win2/releases', note: '客户端另需 usbipd-win' },
   { id: 'winfsp', name: '文件夹挂载', product: 'WinFsp 2025 (2.1)', purpose: '客户端共享的文件夹出现在被控端的一个盘符里，被控端的程序可以直接打开、保存客户端的文件', status: null, installed: false, url: 'https://github.com/winfsp/winfsp/releases', note: '免费开源（GPLv3，含开源软件例外）；客户端在“连接设置 → 共享文件夹”里选择文件夹' },

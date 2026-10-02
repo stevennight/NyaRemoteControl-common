@@ -63,7 +63,66 @@ pub fn find_render_device(part: &str) -> Option<(IMMDevice, String)> {
     })
 }
 
+fn device_id(d: &IMMDevice) -> Option<String> {
+    unsafe {
+        let p = d.GetId().ok()?;
+        let s = p.to_string().ok();
+        windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as *const _));
+        s
+    }
+}
+
+/// Endpoint id and name of the first active recording device whose name contains `part`.
+pub fn find_capture_device(part: &str) -> Option<(String, String)> {
+    let e = enumerator().ok()?;
+    let list = unsafe { e.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) }.ok()?;
+    let n = unsafe { list.GetCount() }.ok()?;
+    let part = part.to_lowercase();
+    (0..n).filter_map(|i| unsafe { list.Item(i) }.ok()).find_map(|d| {
+        let name = friendly_name(&d)?;
+        if name.to_lowercase().contains(&part) {
+            Some((device_id(&d)?, name))
+        } else {
+            None
+        }
+    })
+}
+
+/// Endpoint id of the default recording device for `role` (eConsole, eCommunications).
+pub fn default_capture_id(role: ERole) -> Option<String> {
+    let e = enumerator().ok()?;
+    let d = unsafe { e.GetDefaultAudioEndpoint(eCapture, role) }.ok()?;
+    device_id(&d)
+}
+
+/// Make endpoint `id` the default device for `role`, like the Sound control
+/// panel does (the undocumented but long-stable IPolicyConfig interface).
+pub fn set_default_endpoint(id: &str, role: ERole) -> Result<()> {
+    use std::ffi::c_void;
+    use windows::core::{IUnknown, Interface, GUID, HRESULT, HSTRING, PCWSTR};
+    const CLSID_POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c3bc9);
+    const IID_POLICY_CONFIG: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
+    // IUnknown (3) + GetMixFormat .. SetPropertyValue (10): SetDefaultEndpoint is slot 13.
+    const SET_DEFAULT_ENDPOINT: usize = 13;
+    type SetDefault = unsafe extern "system" fn(*mut c_void, PCWSTR, ERole) -> HRESULT;
+    unsafe {
+        let unk: IUnknown = CoCreateInstance(&CLSID_POLICY_CONFIG_CLIENT, None, CLSCTX_ALL).context("PolicyConfig")?;
+        let mut p: *mut c_void = std::ptr::null_mut();
+        unk.query(&IID_POLICY_CONFIG, &mut p).ok().context("IPolicyConfig")?;
+        // Owns the reference QueryInterface added; released on drop.
+        let policy = IUnknown::from_raw(p);
+        let vtbl = *(p as *const *const usize);
+        let f: SetDefault = std::mem::transmute(*vtbl.add(SET_DEFAULT_ENDPOINT));
+        let w = HSTRING::from(id);
+        let hr = f(p, PCWSTR(w.as_ptr()), role);
+        drop(policy);
+        hr.ok().context("SetDefaultEndpoint")?;
+    }
+    Ok(())
+}
+
 fn open_client(flow: EDataFlow, extra_flags: u32, buffer_hns: i64) -> Result<IAudioClient> {
+
     let device = default_device(flow)?;
     open_device(&device, extra_flags, buffer_hns)
 }
