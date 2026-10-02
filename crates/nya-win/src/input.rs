@@ -65,6 +65,26 @@ fn mouse_input(dx: i32, dy: i32, data: i32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
     }
 }
 
+/// Longest text accepted in one `Injector::text` call.
+pub const MAX_TEXT_CHARS: usize = 4096;
+
+/// Key down and up of one UTF-16 code unit (surrogate pairs are sent as two units).
+fn unicode_inputs(unit: u16) -> [INPUT; 2] {
+    let ki = |up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(0),
+                wScan: unit,
+                dwFlags: if up { KEYEVENTF_UNICODE | KEYEVENTF_KEYUP } else { KEYEVENTF_UNICODE },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    [ki(false), ki(true)]
+}
+
 impl Injector {
     pub fn new() -> Self {
         Self::default()
@@ -150,6 +170,37 @@ impl Injector {
         if dx != 0 {
             send(&[mouse_input(0, 0, dx, MOUSEEVENTF_HWHEEL)]);
         }
+    }
+
+    /// Type `text` into the focused window as Unicode characters (independent
+    /// of the keyboard layout and IME). Line breaks and tabs are typed as the
+    /// Enter and Tab keys, which applications treat as keys, not characters.
+    pub fn text(&mut self, text: &str) {
+        let mut inputs = Vec::new();
+        let flush = |inputs: &mut Vec<INPUT>| {
+            if !inputs.is_empty() {
+                send(inputs);
+                inputs.clear();
+            }
+        };
+        for c in text.chars().take(MAX_TEXT_CHARS) {
+            match c {
+                '\r' => {}
+                '\n' | '\t' => {
+                    flush(&mut inputs);
+                    let sc = if c == '\n' { 0x1C } else { 0x0F };
+                    self.key(sc, false, true);
+                    self.key(sc, false, false);
+                }
+                _ => {
+                    let mut units = [0u16; 2];
+                    for &u in c.encode_utf16(&mut units).iter() {
+                        inputs.extend(unicode_inputs(u));
+                    }
+                }
+            }
+        }
+        flush(&mut inputs);
     }
 
     /// Release everything we pressed (disconnect, helper restart, focus loss).

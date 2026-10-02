@@ -5,12 +5,13 @@
 //! * [`decoder`] – D3D11VA hardware decoding with software fallback
 //! * [`audio`] – Opus encoder / decoder (libopus)
 //! * [`jitter`] – adaptive jitter buffer with drift correction for received audio
+//!   (the platform-free `nya-jitter` crate, re-exported)
 //! * [`nvdec`] – what NVIDIA's NVDEC decodes (for formats D3D11VA lacks)
 
 pub mod audio;
 pub mod decoder;
 pub mod encoder;
-pub mod jitter;
+pub use nya_jitter as jitter;
 pub mod nvdec;
 mod ff;
 

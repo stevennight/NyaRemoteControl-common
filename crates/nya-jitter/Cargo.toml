@@ -1,0 +1,9 @@
+[package]
+name = "nya-jitter"
+description = "Adaptive jitter buffer with clock-drift correction for 48 kHz stereo audio (pure Rust, any platform)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

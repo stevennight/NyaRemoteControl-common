@@ -56,6 +56,7 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::FolderMount,
         Feature::Print,
         Feature::Hdr,
+        Feature::TextInput,
     ]
     .into_iter()
     .map(|f| f as u32)

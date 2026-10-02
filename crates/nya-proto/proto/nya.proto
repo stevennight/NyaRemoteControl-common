@@ -78,6 +78,7 @@ enum Feature {
   FEATURE_FOLDER_MOUNT = 18;      // since 1.4: client folders as a drive on the host (SharedFolders, FS streams)
   FEATURE_PRINT = 19;             // since 1.4: host print jobs as PDF to the client (FilePurpose PRINT)
   FEATURE_HDR = 20;               // since 1.4: HDR10 video (StreamConfig.hdr, CodecCap.ten_bit)
+  FEATURE_TEXT_INPUT = 21;        // since 1.5: InputMsg.text, typed as Unicode on the host (phone keyboards, any language)
 }
 
 // ============================================================================
@@ -538,8 +539,15 @@ message InputMsg {
     Key key = 5;
     ReleaseAll release_all = 6;
     Gamepad gamepad = 7;             // since 1.1
+    TextInput text = 8;              // since 1.5 (TEXT_INPUT)
   }
 }
+
+// Text typed on the client (e.g. a phone keyboard with its own IME). The host
+// types it into the focused window as Unicode characters, independent of its
+// keyboard layout and IME; line breaks and tabs are typed as Enter and Tab.
+// At most 4096 characters per message.
+message TextInput { string text = 1; }
 
 // XInput state of one controller (XINPUT_GAMEPAD layout).
 message Gamepad {

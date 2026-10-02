@@ -17,7 +17,7 @@
 //!   pause apart from lost packets (only the latter are filled with silence).
 //!
 //! Pure Rust with the clock passed in, so it is unit tested and usable on any
-//! platform.
+//! platform (Windows client through `nya_media::jitter`, Android core directly).
 
 use std::collections::VecDeque;
 
