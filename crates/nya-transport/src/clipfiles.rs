@@ -143,10 +143,17 @@ impl Incoming {
         let Some(e) = m.get_mut(&id) else { return Paste::Unknown };
         match &e.result {
             Some(Ok(p)) => return Paste::Ready(p.clone()),
-            Some(Err(msg)) => return Paste::Failed(msg.clone()),
+            // Failed before (connection lost, a file couldn't be read): this paste tries again.
+            Some(Err(_)) => {
+                e.result = None;
+                e.received = 0;
+                e.requested = false;
+                let _ = std::fs::remove_dir_all(&e.root);
+            }
             None if e.requested => return Paste::Wait,
             None => {}
         }
+
         e.requested = true;
         let prepared = std::fs::create_dir_all(&e.root).and_then(|_| {
             for f in e.entries.iter().filter(|f| f.is_dir) {
@@ -245,12 +252,16 @@ mod tests {
         inc.register(&pb::FileOffer { transfer_id: 8, files: vec![entry("x", 0, true)] }, &cache);
         assert!(matches!(inc.paste(8), Paste::Ready(p) if p.len() == 1));
 
-        // Failure is reported once and sticks.
+        // A failure is reported once; the next paste tries again from scratch.
         inc.register(&pb::FileOffer { transfer_id: 9, files: vec![entry("f", 1, false)] }, &cache);
         assert_eq!(inc.paste(9), Paste::Request);
         assert_eq!(inc.fail(9, "boom".into()), Some(Err("boom".into())));
-        assert_eq!(inc.file_done(9, Ok(())), None);
-        assert_eq!(inc.paste(9), Paste::Failed("boom".into()));
+        assert_eq!(inc.file_done(9, Ok(())), None, "late pieces of the failed attempt are ignored");
+        assert_eq!(inc.paste(9), Paste::Request, "pasting again retries");
+        assert_eq!(inc.paste(9), Paste::Wait);
+        let ok = inc.file_done(9, Ok(())).unwrap().unwrap();
+        assert_eq!(inc.paste(9), Paste::Ready(ok));
+
         let _ = std::fs::remove_dir_all(&cache);
     }
 

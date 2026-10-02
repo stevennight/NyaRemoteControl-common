@@ -32,9 +32,11 @@ const DV_E_FORMATETC: HRESULT = HRESULT(0x8004_0064_u32 as i32);
 const OLE_E_ADVISENOTSUPPORTED: HRESULT = HRESULT(0x8004_0003_u32 as i32);
 const DROPEFFECT_COPY: u32 = 1;
 
-/// Fetches the offered files; blocks until they are local. Called at most
-/// once per offer (the result is kept), on the clipboard thread.
-pub type Provider = Box<dyn FnOnce() -> std::result::Result<Vec<PathBuf>, String> + Send>;
+/// Fetches the offered files; blocks until they are local. Runs on a worker
+/// thread (the clipboard thread keeps serving other requests meanwhile). A
+/// success is kept; after a failure the next paste calls it again (files
+/// that already arrived are not fetched twice: the provider's side knows).
+pub type Provider = Arc<dyn Fn() -> std::result::Result<Vec<PathBuf>, String> + Send + Sync>;
 
 /// `DROPFILES` + NUL-separated wide paths, as CF_HDROP expects.
 pub fn dropfiles(paths: &[PathBuf]) -> anyhow::Result<HGLOBAL> {
@@ -76,15 +78,34 @@ fn preferred_drop_effect() -> u16 {
     unsafe { RegisterClipboardFormatW(windows::core::w!("Preferred DropEffect")) as u16 }
 }
 
+/// Where an offer's files are.
+type Slot = Arc<Mutex<Option<std::result::Result<Vec<PathBuf>, String>>>>;
+
 enum Files {
-    Waiting(Option<Provider>),
-    Ready(std::result::Result<Vec<PathBuf>, String>),
+    /// Not asked for yet, or the last attempt failed.
+    Idle,
+    /// Being fetched; the worker fills the slot.
+    Fetching(Slot),
+    Ready(Vec<PathBuf>),
 }
 
 #[implement(IDataObject)]
 struct DataObject {
+    provider: Provider,
     files: Mutex<Files>,
     drop_effect: u16,
+}
+
+/// Dispatch window messages (and with them COM calls into this apartment) for up to `ms`.
+fn pump(ms: u32) {
+    unsafe {
+        MsgWaitForMultipleObjects(None, false, ms, QS_ALLINPUT);
+        let mut msg = MSG::default();
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
 }
 
 impl DataObject {
@@ -97,19 +118,46 @@ impl DataObject {
         (f.cfFormat == CF_HDROP || f.cfFormat == self.drop_effect) && f.tymed & TYMED_HGLOBAL.0 as u32 != 0
     }
 
-    /// The local paths, fetching them the first time.
+    /// The local paths, fetching them the first time. Waits without blocking
+    /// the apartment: another paste or a clipboard viewer asking meanwhile is
+    /// served (and waits for the same fetch) instead of stalling behind it.
     fn paths(&self) -> std::result::Result<Vec<PathBuf>, String> {
-        let mut g = self.files.lock().unwrap();
-        if let Files::Waiting(p) = &mut *g {
-            let r = match p.take() {
-                Some(provider) => provider(),
-                None => Err("files unavailable".into()),
-            };
-            *g = Files::Ready(r);
-        }
-        match &*g {
-            Files::Ready(r) => r.clone(),
-            Files::Waiting(_) => unreachable!(),
+        let slot = {
+            let mut g = self.files.lock().unwrap();
+            match &*g {
+                Files::Ready(p) => return Ok(p.clone()),
+                Files::Fetching(s) => s.clone(),
+                Files::Idle => {
+                    let s: Slot = Arc::default();
+                    let (provider, out) = (self.provider.clone(), s.clone());
+                    let spawned = std::thread::Builder::new().name("nya-clipboard-fetch".into()).spawn(move || {
+                        let r = provider();
+                        *out.lock().unwrap() = Some(r);
+                    });
+                    if let Err(e) = spawned {
+                        return Err(format!("fetch thread: {e}"));
+                    }
+                    *g = Files::Fetching(s.clone());
+                    s
+                }
+            }
+        };
+        loop {
+            let done = slot.lock().unwrap().clone();
+            if let Some(r) = done {
+                let mut g = self.files.lock().unwrap();
+                match &r {
+                    Ok(p) => *g = Files::Ready(p.clone()),
+                    // Try again on the next paste.
+                    Err(_) => {
+                        if matches!(&*g, Files::Fetching(s) if Arc::ptr_eq(s, &slot)) {
+                            *g = Files::Idle;
+                        }
+                    }
+                }
+                return r;
+            }
+            pump(50);
         }
     }
 }
@@ -258,14 +306,7 @@ fn run(rx: Receiver<Cmd>, ours: Arc<std::sync::atomic::AtomicBool>) {
     let still_ours = |c: &Option<IDataObject>| c.as_ref().is_some_and(|o| unsafe { OleIsCurrentClipboard(o) }.is_ok());
     loop {
         // Pump messages (OLE marshals calls into this thread), wake up for commands.
-        unsafe {
-            MsgWaitForMultipleObjects(None, false, 100, QS_ALLINPUT);
-            let mut msg = MSG::default();
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
+        pump(100);
         ours.store(still_ours(&current), std::sync::atomic::Ordering::SeqCst);
         loop {
             let cmd = match rx.try_recv() {
@@ -275,7 +316,7 @@ fn run(rx: Receiver<Cmd>, ours: Arc<std::sync::atomic::AtomicBool>) {
             };
             match cmd {
                 Cmd::Offer(provider) => {
-                    let obj: IDataObject = DataObject { files: Mutex::new(Files::Waiting(Some(provider))), drop_effect }.into();
+                    let obj: IDataObject = DataObject { provider, files: Mutex::new(Files::Idle), drop_effect }.into();
                     // Our clipboard watchers must see this before the change becomes visible.
                     ours.store(true, std::sync::atomic::Ordering::SeqCst);
                     let mut set = false;
@@ -386,7 +427,80 @@ mod tests {
         }
     }
 
+    /// The data object lives in one apartment (as on the clipboard thread),
+    /// callers in others (as Explorer and clipboard viewers do through COM).
+    /// While one paste waits for a slow fetch, another caller is answered at
+    /// once and the fetch runs only once; a failed fetch is retried next time.
+    /// No system clipboard involved.
+    #[test]
+    fn slow_fetch_does_not_block_other_callers() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::time::Instant;
+        use windows::core::Interface;
+        use windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream;
+        use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
+        use windows::Win32::System::Com::IStream;
+
+        let calls = Arc::new(AtomicU32::new(0));
+        let c = calls.clone();
+        let provider: Provider = Arc::new(move || {
+            let n = c.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(600));
+            if n == 0 {
+                Err("first attempt fails".into())
+            } else {
+                Ok(vec![PathBuf::from("C:\\x.txt")])
+            }
+        });
+        // Owner apartment: create, marshal twice, keep pumping.
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, usize)>();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = stop.clone();
+        let owner = std::thread::spawn(move || unsafe {
+            OleInitialize(None).unwrap();
+            let obj: IDataObject = DataObject { provider, files: Mutex::new(Files::Idle), drop_effect: preferred_drop_effect() }.into();
+            let a = CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj).unwrap();
+            let b = CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj).unwrap();
+            tx.send((a.into_raw() as usize, b.into_raw() as usize)).unwrap();
+            while !s.load(Ordering::SeqCst) {
+                pump(20);
+            }
+            drop(obj);
+            OleUninitialize();
+        });
+        let (a, b) = rx.recv().unwrap();
+        let caller = move |stream: usize, delay_ms: u64| {
+            std::thread::spawn(move || unsafe {
+                let fmt = FORMATETC { cfFormat: CF_HDROP, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
+                OleInitialize(None).unwrap();
+                let obj: IDataObject = CoGetInterfaceAndReleaseStream(&IStream::from_raw(stream as *mut _)).unwrap();
+                std::thread::sleep(Duration::from_millis(delay_ms));
+                let t = Instant::now();
+                let q = obj.QueryGetData(&fmt);
+                let quick = t.elapsed();
+                let first = obj.GetData(&fmt).is_ok();
+                let second = obj.GetData(&fmt).is_ok();
+                drop(obj);
+                OleUninitialize();
+                (q.is_ok(), quick, first, second)
+            })
+        };
+        let slow = caller(a, 0);
+        let other = caller(b, 150);
+        let (q1, _, first1, second1) = slow.join().unwrap();
+        let (q2, quick2, first2, second2) = other.join().unwrap();
+        stop.store(true, Ordering::SeqCst);
+        owner.join().unwrap();
+        assert!(q1 && q2);
+        assert!(quick2 < Duration::from_millis(300), "answered while the fetch runs ({quick2:?})");
+        // The first fetch fails for both waiting on it; the next one succeeds and is kept.
+        assert!(!first1 && !first2);
+        assert!(second1 && second2);
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "one fetch per attempt, shared by both callers");
+    }
+
     /// Offer, read back through the real clipboard (this process owns it),
+
     /// clear. Uses the desktop clipboard, so it only runs when asked for.
     #[test]
     #[ignore]
@@ -397,7 +511,8 @@ mod tests {
         let dir = std::env::temp_dir();
         let expected = vec![dir.join("nya-virtual-a.txt")];
         let e2 = expected.clone();
-        vc.offer(Box::new(move || Ok(e2)));
+        vc.offer(Arc::new(move || Ok(e2.clone())));
+
         std::thread::sleep(Duration::from_millis(400));
         assert!(vc.is_ours());
         assert!(crate::clipboard::has_files());
