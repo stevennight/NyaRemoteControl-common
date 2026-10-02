@@ -771,7 +771,7 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 - 文件：手机选文件（系统文件选择器）后由核心经文件流发送；被控端复制文件时手机提示"保存到手机"，收到后存入 `下载/NyaRemoteControl`。
 - 剪贴板：文字双向；图片双向（CF_DIB，手机端转成 PNG 经 FileProvider 放进剪贴板，发送时缩到每边不超过 4096 像素）；手机剪贴板里的文件（content URI）先复制到缓存再按剪贴板文件提供给被控端，在电脑上粘贴时才传输（`FEATURE_CLIPBOARD_FILES`，与 Windows 客户端同一套 `nya-transport::clipfiles`）。面板"发送剪贴板"把手机剪贴板（文字 / 图片 / 文件）发给电脑；被控端的文字和图片按设置自动进入手机剪贴板。
 - 打印：被控端的打印任务（PDF）到手机后提示"打印 / 保存"，打印走系统打印框架（已安装的打印服务或另存 PDF）。
-- 麦克风：AudioRecord 48 kHz 单声道复制成双声道，MediaCodec Opus 编码（Android 10 以上），每包一个 MIC 数据报；需要被控端装有虚拟声卡（`SessionInfo.mic_device`）。面板开关，记住上次状态。
+- 麦克风：AudioRecord 48 kHz 单声道复制成双声道，MediaCodec Opus 编码（Android 10 以上），每包一个 MIC 数据报；需要被控端装有虚拟声卡（`SessionInfo.mic_device`）。面板开关，记住上次状态。用普通 MIC 音源并声明不涉及隐私（`setPrivacySensitive(false)`），回声消除、降噪作为音效加上：VOICE_COMMUNICATION 会让手机上其他应用（语音输入、助手）录不到声音。应用转到后台时停止采集，回到前台再继续。
 - 文件夹挂载：设置里选择手机文件夹（系统选择器，转换为存储路径，可设只读），连接时发 `SharedFolders`，核心直接用 `nya-transport::folders` 回答被控端的 FS 请求。需要"所有文件访问"权限（Android 11 以上）或存储权限（更早的版本）。
 - USB 透传：手机 OTG 接口上的设备在面板里选择共享。应用申请权限、打开设备并强制占用所有接口，把文件描述符和原始描述符交给核心；核心自己就是 USB/IP 服务端（代替 Windows 上的 usbipd-win），在被控端经隧道流连来时回答设备列表 / 导入，把 URB 通过 usbdevfs 异步提交（SUBMITURB / REAPURBNDELAY / DISCARDURB），控制传输里的 SET_CONFIGURATION / SET_INTERFACE / CLEAR_FEATURE(HALT) 改用对应 ioctl。不支持等时传输（摄像头、声卡类设备），这类请求回错误。
 - 应用内更新：每天最多自动检查一次 GitHub Releases（设置里可手动检查），下载 APK 并核对 `.sha256`，交给系统安装程序。
