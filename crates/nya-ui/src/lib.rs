@@ -90,23 +90,45 @@ impl Gui {
     }
 }
 
-/// Add a CJK font from Windows (Microsoft YaHei, falling back to others).
+/// Add fallback fonts from Windows: a CJK font (Microsoft YaHei, falling back
+/// to others), then Segoe UI Symbol for symbols neither egui's fonts nor the
+/// CJK font have (▾ ⋯ ✕ ✓ …, otherwise drawn as boxes).
 pub fn install_fonts(ctx: &egui::Context) {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
-    let candidates = ["msyh.ttc", "msyh.ttf", "Deng.ttf", "simhei.ttf", "simsun.ttc"];
+    let dir = std::path::Path::new(&windir).join("Fonts");
     let mut fonts = egui::FontDefinitions::default();
-    for name in candidates {
-        let path = std::path::Path::new(&windir).join("Fonts").join(name);
-        if let Ok(bytes) = std::fs::read(&path) {
-            fonts.font_data.insert("cjk".into(), egui::FontData::from_owned(bytes).into());
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts.families.entry(family).or_default().push("cjk".into());
-            }
-            ctx.set_fonts(fonts);
+    let mut add = |key: &str, candidates: &[&str]| {
+        let Some(bytes) = candidates.iter().find_map(|n| std::fs::read(dir.join(n)).ok()) else { return false };
+        fonts.font_data.insert(key.into(), egui::FontData::from_owned(bytes).into());
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(key.into());
+        }
+        true
+    };
+    if !add("cjk", &["msyh.ttc", "msyh.ttf", "Deng.ttf", "simhei.ttf", "simsun.ttc"]) {
+        tracing::warn!("no CJK font found under {}; Chinese text may not render", dir.display());
+    }
+    if !add("symbols", &["seguisym.ttf"]) {
+        tracing::warn!("Segoe UI Symbol not found under {}; some symbols may not render", dir.display());
+    }
+    ctx.set_fonts(fonts);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn symbols_used_by_the_ui_have_glyphs() {
+        let ctx = egui::Context::default();
+        super::install_fonts(&ctx);
+        let _ = ctx.run(Default::default(), |_| {});
+        let id = egui::FontId::proportional(14.0);
+        // Only meaningful where the Windows fonts exist (not on bare CI images).
+        if !std::path::Path::new(r"C:\Windows\Fonts\seguisym.ttf").exists() {
             return;
         }
+        let missing: String = ctx.fonts(|f| "▾▸⋯✕✓…·→↑↓—×＋".chars().filter(|&c| !f.has_glyph(&id, c)).collect());
+        assert!(missing.is_empty(), "no glyph for {missing}");
     }
-    tracing::warn!("no CJK font found under {windir}\\Fonts; Chinese text may not render");
 }
 
 /// Dark theme matching the web pages (common/web/src/lib/theme.css).
