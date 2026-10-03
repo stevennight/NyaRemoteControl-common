@@ -304,3 +304,121 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 }
+
+#[cfg(test)]
+mod stress {
+    use super::*;
+    use crate::endpoint::{client_endpoint, connect, server_endpoint};
+    use crate::Identity;
+    use nya_proto::frame::stream_type;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// A copied folder (many files, mixed sizes) pasted on the other side
+    /// while the video keeps the link full: everything arrives, nothing
+    /// stalls (with file streams below the video, the tail crawled for ages).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn folder_paste_over_quic() {
+        let base = std::env::temp_dir().join(format!("nya-stress-{}", nya_proto::now_us()));
+        let src = base.join("src").join("folder");
+        let mut total = 0u64;
+        for i in 0..300u64 {
+            let dir = src.join(format!("d{}", i % 7));
+            std::fs::create_dir_all(&dir).unwrap();
+            // Mostly small files, a few large ones.
+            let size = if i % 50 == 0 { 20 << 20 } else if i % 10 == 0 { 2 << 20 } else { 1000 + i * 37 };
+            std::fs::write(dir.join(format!("f{i}.bin")), vec![(i % 251) as u8; size as usize]).unwrap();
+            total += size;
+        }
+        let items = Outgoing::expand(&[src.clone()], true);
+        let offer = {
+            let mut o = Outgoing::default();
+            o.offer_items(items.clone()).unwrap()
+        };
+        let sid = Identity::generate().unwrap();
+        let server = server_endpoint("127.0.0.1:0".parse().unwrap(), &sid).unwrap();
+        let addr = server.local_addr().unwrap();
+
+        // Receiver: the pasting side.
+        let inc = Incoming::default();
+        let cache = base.join("cache");
+        inc.register(&offer, &cache);
+        assert_eq!(inc.paste(offer.transfer_id), Paste::Request);
+        let received = std::sync::Arc::new(AtomicU64::new(0));
+        let (inc2, rec2) = (inc.clone(), received.clone());
+        let recv = tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+            let c2 = conn.clone();
+            tokio::spawn(async move {
+                while let Ok(mut r) = c2.accept_uni().await {
+                    let (inc, rec, done_tx) = (inc2.clone(), rec2.clone(), done_tx.clone());
+                    tokio::spawn(async move {
+                        match nya_proto::framing::read_varint(&mut r).await {
+                            Ok(Some(t)) if t == stream_type::FILE => {}
+                            _ => {
+                                // The "video": drain it.
+                                while let Ok(Some(_)) = r.read_chunk(1 << 20, true).await {}
+                                return;
+                            }
+                        }
+                        let h = crate::files::read_header(&mut r).await.unwrap();
+                        let root = inc.root(h.transfer_id).unwrap();
+                        let res = crate::files::receive_to_tree(&mut r, &h, &root, |n| {
+                            rec.fetch_add(n, Ordering::Relaxed);
+                        })
+                        .await;
+                        if let Some(done) = inc.file_done(h.transfer_id, res.map(|_| ()).map_err(|e| format!("{e:#}"))) {
+                            let _ = done_tx.send(done);
+                        }
+                    });
+                }
+            });
+            let r = done_rx.recv().await.unwrap();
+            conn.close(0u32.into(), b"");
+            r
+        });
+
+        let cid = Identity::generate().unwrap();
+        let ep = client_endpoint(addr).unwrap();
+        let conn = connect(&ep, addr, &cid, Some(sid.fingerprint())).await.unwrap();
+        // The video: never ends, always has data waiting.
+        let video_conn = conn.clone();
+        let video = tokio::spawn(async move {
+            let mut s = video_conn.open_uni().await.unwrap();
+            s.set_priority(1).unwrap();
+            s.write_all(&[0x7f]).await.unwrap(); // not a FILE stream
+            let frame = vec![0u8; 20_000];
+            loop {
+                if s.write_all(&frame).await.is_err() {
+                    return;
+                }
+                // Always more queued: the video fills the link.
+            }
+        });
+        let start = Instant::now();
+        let progress = received.clone();
+        let watch = tokio::spawn(async move {
+            let mut last = (0, Instant::now());
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let n = progress.load(Ordering::Relaxed);
+                eprintln!("{:5.1}s  {:.1} MB", start.elapsed().as_secs_f64(), n as f64 / 1e6);
+                if n != last.0 {
+                    last = (n, Instant::now());
+                } else if last.1.elapsed() > Duration::from_secs(10) {
+                    panic!("stalled at {:.1} MB", n as f64 / 1e6);
+                }
+            }
+        });
+        crate::clipfiles::send_items(&conn, offer.transfer_id, &items, pb::FilePurpose::Clipboard, |_, _| {}).await.unwrap();
+        let done = tokio::time::timeout(Duration::from_secs(120), recv).await.expect("whole folder within 2 min").unwrap();
+        watch.abort();
+        video.abort();
+        let top = done.unwrap();
+        eprintln!("done in {:.1}s: {:.1} MB, top {top:?}", start.elapsed().as_secs_f64(), total as f64 / 1e6);
+        assert_eq!(received.load(Ordering::Relaxed), total);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

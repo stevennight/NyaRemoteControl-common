@@ -1,11 +1,14 @@
 """Generate the application icons (common/assets/*.ico) from code, so they can
 be rebuilt without an image editor: a rounded square with a diagonal gradient
-and a white "N", like the logo in the web pages (common/web/src/lib/theme.css).
+and, in white, the Android app's mark — a monitor with cat ears and a mouse
+pointer (android/app/src/main/res/drawable/ic_launcher_foreground.xml, whose
+108-unit coordinates are used here); the screen shows the gradient.
 
     python common/scripts/gen-icons.py
 
-client.ico: pink → orange (the launcher's accent); server.ico: blue → teal,
-so the two programs are easy to tell apart. Standard library only.
+The Windows program and its service are one product: both icons are red
+(pink → orange, the launcher's accent); the Android app is blue. Standard
+library only.
 """
 
 import os
@@ -15,10 +18,14 @@ import zlib
 SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 SUPERSAMPLE = 4
 
+RED = ((0xE8, 0x57, 0x7A), (0xF5, 0x9E, 0x6B))
 ICONS = {
-    "client.ico": ((0xE8, 0x57, 0x7A), (0xF5, 0x9E, 0x6B)),
-    "server.ico": ((0x3B, 0x6F, 0xE0), (0x2F, 0xB5, 0xA6)),
+    "client.ico": RED,
+    "server.ico": RED,
 }
+
+# The Android mark's 108-unit canvas: this window of it fills the icon.
+VIEW0, VIEW1 = 20.0, 88.0
 
 
 def inside_rounded(x, y, size, r):
@@ -40,22 +47,37 @@ def inside_poly(x, y, pts):
     return c
 
 
-def n_glyph(size):
-    """The letter N as three polygons (left stem, diagonal, right stem)."""
-    s = size
-    left, right = 0.27 * s, 0.73 * s
-    top, bottom = 0.24 * s, 0.76 * s
-    w = 0.115 * s
-    stem_l = [(left, top), (left + w, top), (left + w, bottom), (left, bottom)]
-    stem_r = [(right - w, top), (right, top), (right, bottom), (right - w, bottom)]
-    diag = [(left, top), (left + w * 1.15, top), (right, bottom), (right - w * 1.15, bottom)]
-    return [stem_l, diag, stem_r]
+def in_round_rect(x, y, x0, y0, x1, y1, r):
+    if not (x0 <= x <= x1 and y0 <= y <= y1):
+        return False
+    cx = min(max(x, x0 + r), x1 - r)
+    cy = min(max(y, y0 + r), y1 - r)
+    return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+
+
+EARS = [[(36, 38), (41, 27), (47, 38)], [(61, 38), (67, 27), (72, 38)]]
+STAND = [(48, 68), (60, 68), (62, 76), (46, 76)]
+CURSOR = [(50, 44), (50, 58), (53.5, 54.5), (56, 60), (58.5, 59), (56, 53.5), (61, 53.5)]
+
+
+def is_mark(u, v):
+    """White at (u, v) in the Android canvas's coordinates?"""
+    if inside_poly(u, v, CURSOR):
+        return True
+    if 34 <= u <= 74 and 40 <= v <= 62:
+        return False  # the screen: shows the background
+    return (
+        in_round_rect(u, v, 28, 36, 80, 68, 4)
+        or any(inside_poly(u, v, e) for e in EARS)
+        or inside_poly(u, v, STAND)
+        or (42 <= u <= 66 and 76 <= v <= 79)
+    )
 
 
 def render(size, c0, c1):
     ss = size * SUPERSAMPLE
     radius = 0.23 * ss
-    glyph = n_glyph(ss)
+    scale = (VIEW1 - VIEW0) / ss
     rows = []
     for py in range(size):
         row = bytearray()
@@ -67,7 +89,7 @@ def render(size, c0, c1):
                     y = py * SUPERSAMPLE + sy + 0.5
                     if not inside_rounded(x, y, ss, radius):
                         continue
-                    if any(inside_poly(x, y, p) for p in glyph):
+                    if is_mark(VIEW0 + x * scale, VIEW0 + y * scale):
                         col = (255, 255, 255)
                     else:
                         t = (x + y) / (2 * ss)

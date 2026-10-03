@@ -11,6 +11,10 @@ use quinn::{Connection, RecvStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const CHUNK: usize = 256 * 1024;
+/// File streams share the link with the video (same priority, served in
+/// turn). Below it they starved whenever the video filled the link: a copied
+/// folder stopped part way (seen at 47.5 MB) and only crawled on.
+const FILE_PRIORITY: i32 = 1;
 /// Clipboard images larger than this are not transferred.
 pub const MAX_IMAGE_BYTES: u64 = 64 << 20;
 
@@ -197,7 +201,7 @@ pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, 
     };
     let mut file = opened.with_context(|| format!("打开 {}", path.display()))?;
     let mut s = conn.open_uni().await?;
-    s.set_priority(-1)?; // below video, input and cursor
+    s.set_priority(FILE_PRIORITY)?; // below input and cursor
     let mut prelude = Vec::new();
     encode_varint(stream_type::FILE, &mut prelude);
     prelude.extend(nya_proto::framing::encode_msg(&header));
@@ -220,7 +224,7 @@ pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, 
 /// Send in-memory bytes (clipboard image).
 pub async fn send_bytes(conn: &Connection, header: FileHeader, data: &[u8]) -> Result<()> {
     let mut s = conn.open_uni().await?;
-    s.set_priority(-1)?;
+    s.set_priority(FILE_PRIORITY)?;
     let mut prelude = Vec::new();
     encode_varint(stream_type::FILE, &mut prelude);
     prelude.extend(nya_proto::framing::encode_msg(&header));
