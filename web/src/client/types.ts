@@ -63,6 +63,10 @@ export type ClientState = {
   computer_name: string;
   /** Look for a new version at start. */
   check_updates: boolean;
+  /** Closing the window keeps the program in the tray. */
+  close_to_tray: boolean;
+  /** Starts with Windows (this user's sign-in), into the tray. */
+  autostart: boolean;
   update: UpdateInfo;
   /** Hardware decoding summary of this computer. */
   decode: string;

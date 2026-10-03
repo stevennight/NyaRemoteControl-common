@@ -9,7 +9,7 @@ const state: ClientState = {
   computer: 'DESKTOP-DEV',
   client_name: '',
   computer_name: 'DESKTOP-DEV',
-  check_updates: true,
+  check_updates: true, close_to_tray: true, autostart: false,
   update: { state: 'available', current: '0.2.0', latest: '0.2.1', notes: '- 修复：……\n- 新增：自动更新', page: 'https://github.com/stevennight/NyaRemoteControl-windows/releases/tag/v0.7.1', progress: 0, message: '', checked_unix: now - 60 },
   decode: '硬件解码：不可用（软件解码）',
   hosts: [
@@ -100,6 +100,12 @@ export const mock: Mock = async (cmd, args, emit) => {
       return null;
     case 'set_check_updates':
       state.check_updates = args.on;
+      return clone();
+    case 'set_close_to_tray':
+      state.close_to_tray = args.on;
+      return clone();
+    case 'set_autostart':
+      state.autostart = args.on;
       return clone();
     case 'set_client_name':
       state.client_name = args.name.trim();

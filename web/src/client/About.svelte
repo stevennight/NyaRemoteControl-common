@@ -21,6 +21,22 @@
     }
   }
 
+  async function setAutostart(on: boolean) {
+    try {
+      onsaved(await call<ClientState>('set_autostart', { on }));
+    } catch (e) {
+      toast(errorText(e), 'error');
+    }
+  }
+
+  async function setTray(on: boolean) {
+    try {
+      onsaved(await call<ClientState>('set_close_to_tray', { on }));
+    } catch (e) {
+      toast(errorText(e), 'error');
+    }
+  }
+
   async function saveName(e: SubmitEvent) {
     e.preventDefault();
     savingName = true;
@@ -75,6 +91,14 @@
     <div class="field">
       <div class="text"><b>启动时检查新版本</b><span>从 GitHub 查看是否有新版本；是否安装由你决定</span></div>
       <Switch bind:checked={() => cs.check_updates, (v) => setCheck(v)} label="启动时检查新版本" />
+    </div>
+    <div class="field">
+      <div class="text"><b>关闭窗口时最小化到托盘</b><span>程序在后台继续运行（远程会话、远程控制本机不受影响）；点托盘图标打开，右键“退出”才真正关闭</span></div>
+      <Switch bind:checked={() => cs.close_to_tray, (v) => setTray(v)} label="关闭窗口时最小化到托盘" />
+    </div>
+    <div class="field">
+      <div class="text"><b>开机自动启动</b><span>登录 Windows 后在托盘运行，不打开窗口。和“远程控制本机”的服务无关：服务随电脑启动，不需要登录</span></div>
+      <Switch bind:checked={() => cs.autostart, (v) => setAutostart(v)} label="开机自动启动" />
     </div>
   </div>
 

@@ -775,6 +775,8 @@ M0–M7 的代码均已完成；实机验证情况见 §13。
 - 远程画面在单独的会话窗口（D3D11 交换链），会话工具条和统计面板用 egui 绘制在上面。
 - 注意：创建 winit 窗口前不能在 UI 线程初始化多线程 COM，否则 winit 的 OleInitialize 失败。
 
+- 托盘（0.9.2，`app/src/tray.rs`）：主程序有托盘图标（tray-icon），关闭主窗口时隐藏到托盘（设置 `close_to_tray`，默认开），左键 / “打开”显示，“退出”结束所有会话后退出。每个用户会话只运行一个主程序（命名互斥体 `Local\NyaRemoteControl.App`；再次启动时通过命名事件 `Local\NyaRemoteControl.Show` 让已运行的显示出来，自己退出；`connect` 等子命令不受此限）。开机自动启动是当前用户的 `HKCU\…\Run` 值 `"NyaRemoteControl.exe" --tray`（登录后在托盘运行、不显示窗口），每次启动刷新路径，卸载时删除；与远程控制服务（随电脑启动）分开。主窗口创建时隐藏，页面第一次请求后再显示（最多等 4 秒），避免 WebView2 启动时的白屏。
+
 ### 14.8 安装、发布与自动更新
 - 版本：server、client 各自的 `VERSION` 文件（语义化版本），和 Cargo.toml 保持一致；显示的版本带提交号。`scripts/release.ps1 x.y.z` 改版本、写 `COMMON_REF`、提交并打 tag；推送 tag 后 GitHub Actions 构建 NSIS 安装包、便携 zip 和 `.sha256` 并发布到 Releases（带后缀的为预发布）。发版前检查 common 已推送、协议已冻结（§6.4）。
 - 被控端更新：服务每 12 小时检查 GitHub Releases。确认更新后，服务下载安装包并核对 SHA-256，再启动独立于服务的更新程序（`%ProgramData%\NyaRemoteControl\update\nya-updater.exe`，即 `nya-server-svc.exe` 的副本，`apply-update` 子命令）：备份当前文件 → 静默安装 → 等待新版本服务在 120 秒内通过控制管道应答 → 不正常则恢复备份并重新注册服务 → 无论如何最后确保服务在运行。结果写入 `update\result.json`，服务下次启动时报告。
