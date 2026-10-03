@@ -74,6 +74,12 @@
     ['datagram', '数据报 + 纠错', '丢包时靠纠错数据恢复，恢复不了就跳过这一帧，不卡顿；多占约 10–50% 带宽'],
   ];
   const transportHelp = $derived(transports.find((p) => p[0] === d.video_transport)?.[2] ?? '');
+  const connections = [
+    ['auto', '自动', '优先 UDP；UDP 连不上或丢包严重时改用 TCP，UDP 恢复后自动换回'],
+    ['udp', '仅 UDP', '延迟最低；网络限制 UDP 时可能连不上或卡顿'],
+    ['tcp', '仅 TCP', '适合 UDP 不通或很差的网络；网络差时延迟比 UDP 高。端口转发需要同时转发 TCP'],
+  ];
+  const connectionHelp = $derived(connections.find((p) => p[0] === (d.transport ?? 'auto'))?.[2] ?? '');
 
   async function addFolder() {
     try {
@@ -209,6 +215,12 @@
       <div class="text"><b>网络变差时</b><span>{policyHelp}</span></div>
       <select class="input" bind:value={d.bitrate_policy} aria-label="码率策略">
         {#each policies as [v, l] (v)}<option value={v}>{l}</option>{/each}
+      </select>
+    </div>
+    <div class="field">
+      <div class="text"><b>连接方式</b><span>{connectionHelp}</span></div>
+      <select class="input" bind:value={d.transport} aria-label="连接方式">
+        {#each connections as [v, l] (v)}<option value={v}>{l}</option>{/each}
       </select>
     </div>
     <div class="field">

@@ -356,11 +356,13 @@ impl Expected {
     }
 }
 
-/// Host: accept file channels on `bind` (TCP) for sessions in `expected`.
-pub async fn listen(bind: SocketAddr, id: &Identity, expected: Arc<Expected>) -> Result<()> {
+/// Host: accept on `bind` (TCP) file channels for sessions in `expected`
+/// and, with `tunnel`, whole sessions over TCP (QUIC over TCP, see
+/// [`crate::tcptunnel`]): told apart by their first byte.
+pub async fn listen(bind: SocketAddr, id: &Identity, expected: Arc<Expected>, tunnel: Option<Arc<crate::tcptunnel::TunnelSocket>>) -> Result<()> {
     let listener = bind_listener(bind)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(crate::tls::server_crypto(id)?));
-    tracing::info!("file channel: listening on TCP {bind}");
+    tracing::info!("listening on TCP {bind} (file channel{})", if tunnel.is_some() { ", sessions over TCP" } else { "" });
     loop {
         let (tcp, peer) = match listener.accept().await {
             Ok(x) => x,
@@ -370,8 +372,24 @@ pub async fn listen(bind: SocketAddr, id: &Identity, expected: Arc<Expected>) ->
                 continue;
             }
         };
-        let (acceptor, expected) = (acceptor.clone(), expected.clone());
+        let (acceptor, expected, tunnel) = (acceptor.clone(), expected.clone(), tunnel.clone());
         tokio::spawn(async move {
+            // QUIC over TCP starts with its preamble, a file channel with TLS.
+            let mut first = [0u8; 1];
+            if let (Some(tunnel), Ok(Ok(1))) = (&tunnel, tokio::time::timeout(Duration::from_secs(15), tcp.peek(&mut first)).await) {
+                if first[0] == crate::tcptunnel::PREAMBLE[0] {
+                    let mut tcp = tcp;
+                    let mut pre = [0u8; 8];
+                    match tokio::time::timeout(Duration::from_secs(15), tcp.read_exact(&mut pre)).await {
+                        Ok(Ok(_)) if &pre == crate::tcptunnel::PREAMBLE => {
+                            tracing::info!("session over TCP from {peer}");
+                            tunnel.add(tcp, peer);
+                        }
+                        _ => tracing::warn!("TCP {peer}: not a session"),
+                    }
+                    return;
+                }
+            }
             tune(&tcp);
             let r = tokio::time::timeout(Duration::from_secs(15), async move {
                 let mut tls = acceptor.accept(tcp).await.context("TLS")?;
@@ -447,7 +465,7 @@ mod tests {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let hid = host_id.clone();
         let exp = expected.clone();
-        tokio::spawn(async move { listen(addr, &hid, exp).await.unwrap() });
+        tokio::spawn(async move { listen(addr, &hid, exp, None).await.unwrap() });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Each side collects what it receives: (name, bytes or error).

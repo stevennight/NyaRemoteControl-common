@@ -36,6 +36,8 @@ export type Defaults = {
   print_mode: string; // print | open | save
   /** HDR10 video when both the host desktop and this monitor are HDR. */
   hdr: boolean;
+  /** How the session travels: auto | udp | tcp (QUIC over TCP). */
+  transport: string;
 };
 
 export type Host = {

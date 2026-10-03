@@ -15,6 +15,7 @@ pub mod files;
 pub mod folders;
 pub mod identity;
 pub mod pairing;
+pub mod tcptunnel;
 pub mod tls;
 pub mod videodgram;
 
