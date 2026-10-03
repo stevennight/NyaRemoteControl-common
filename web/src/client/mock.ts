@@ -21,7 +21,7 @@ const state: ClientState = {
     mode: 'office', fullscreen: false, display: 0, bitrate_kbps: 0, unlimited_bitrate: false, bitrate_policy: 'auto', video_transport: 'auto',
     max_fps: 0, encoder: 'auto', codec: 'auto', chroma: 'auto', audio: true, clipboard: true, hw_decode: true,
     vd_count: 1, physical_off: false, block_input: false, vd_size: 'window', vd_width: 1920, vd_height: 1080, vd_scale: true, multi_window: false,
-    mic: false, grab_keyboard: false,
+    mic: false, grab_keyboard: true,
     print_mode: 'print', hdr: true,
     shared_folders: [{ path: 'D:\\工作\\项目资料', name: '项目资料', read_only: false }],
   },
