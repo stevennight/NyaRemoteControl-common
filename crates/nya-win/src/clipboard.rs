@@ -210,7 +210,7 @@ pub fn has_text() -> bool {
 
 /// Paths of files copied in Explorer (CF_HDROP).
 pub fn get_files() -> Result<Option<Vec<std::path::PathBuf>>> {
-    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+    use windows::Win32::UI::Shell::HDROP;
     let _open = Open::new()?;
     let h = match unsafe { GetClipboardData(CF_HDROP) } {
         Ok(h) if !h.is_invalid() => h,
@@ -246,7 +246,12 @@ pub fn get_files() -> Result<Option<Vec<std::path::PathBuf>>> {
             return Ok(None);
         }
     };
-    let drop = HDROP(h.0);
+    Ok(Some(hdrop_paths(HDROP(h.0))))
+}
+
+/// The paths in a CF_HDROP.
+fn hdrop_paths(drop: windows::Win32::UI::Shell::HDROP) -> Vec<std::path::PathBuf> {
+    use windows::Win32::UI::Shell::DragQueryFileW;
     let count = unsafe { DragQueryFileW(drop, u32::MAX, None) };
     let mut out = Vec::new();
     for i in 0..count {
@@ -255,7 +260,7 @@ pub fn get_files() -> Result<Option<Vec<std::path::PathBuf>>> {
         let n = unsafe { DragQueryFileW(drop, i, Some(&mut buf)) } as usize;
         out.push(std::path::PathBuf::from(String::from_utf16_lossy(&buf[..n])));
     }
-    Ok(Some(out))
+    out
 }
 
 /// Put files on the clipboard so Explorer can paste them.
@@ -304,4 +309,103 @@ pub fn set_dib(dib: &[u8]) -> Result<()> {
         SetClipboardData(CF_DIB, HANDLE(g.0))?;
     }
     Ok(())
+}
+
+/// Only the OLE marker on the Win32 clipboard: the copying program (Explorer)
+/// put its data object there with OleSetClipboard, and this process sees
+/// none of its formats. Seen from the host's helper (SYSTEM) for every
+/// Explorer copy: "DataObject" and nothing else.
+pub fn only_ole_object() -> bool {
+    use windows::Win32::System::DataExchange::{CountClipboardFormats, IsClipboardFormatAvailable, RegisterClipboardFormatW};
+    unsafe {
+        let data_object = RegisterClipboardFormatW(windows::core::w!("DataObject"));
+        IsClipboardFormatAvailable(data_object).is_ok() && CountClipboardFormats() <= 2
+    }
+}
+
+/// Run `f` on a short-lived OLE (single-threaded apartment) thread.
+fn with_ole<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    std::thread::Builder::new()
+        .name("nya-clipboard-read".into())
+        .spawn(move || unsafe {
+            let ok = windows::Win32::System::Ole::OleInitialize(None).is_ok();
+            let r = f();
+            if ok {
+                windows::Win32::System::Ole::OleUninitialize();
+            }
+            r
+        })
+        .ok()?
+        .join()
+        .ok()
+}
+
+fn ole_get(obj: &windows::Win32::System::Com::IDataObject, cf: u32) -> Option<windows::Win32::System::Com::STGMEDIUM> {
+    use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+    let fmt = FORMATETC { cfFormat: cf as u16, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
+    let m = unsafe { obj.GetData(&fmt) }.ok()?;
+    (m.tymed == TYMED_HGLOBAL.0 as u32).then_some(m)
+}
+
+/// What the copying program's data object holds, read through OLE (when the
+/// Win32 clipboard shows only its marker, see [`only_ole_object`]).
+pub enum OleContent {
+    Files(Vec<std::path::PathBuf>),
+    Text(String),
+    /// Neither; its formats, for logs.
+    Other(String),
+}
+
+pub fn read_ole_clipboard() -> Result<OleContent> {
+    let r = with_ole(|| -> Result<OleContent> {
+        use windows::Win32::System::Com::{DATADIR_GET, FORMATETC};
+        use windows::Win32::System::Ole::{OleGetClipboard, ReleaseStgMedium};
+        let obj = unsafe { OleGetClipboard() }?;
+        if let Some(mut m) = ole_get(&obj, CF_HDROP) {
+            let files = hdrop_paths(windows::Win32::UI::Shell::HDROP(unsafe { m.u.hGlobal }.0));
+            unsafe { ReleaseStgMedium(&mut m) };
+            if !files.is_empty() {
+                return Ok(OleContent::Files(files));
+            }
+        }
+        if let Some(mut m) = ole_get(&obj, shell_idlist_format()) {
+            let files = files_from_idlist(unsafe { m.u.hGlobal });
+            unsafe { ReleaseStgMedium(&mut m) };
+            if !files.is_empty() {
+                return Ok(OleContent::Files(files));
+            }
+        }
+        if let Some(mut m) = ole_get(&obj, CF_UNICODETEXT.0 as u32) {
+            let g = unsafe { m.u.hGlobal };
+            let p = unsafe { GlobalLock(g) } as *const u16;
+            let mut text = None;
+            if !p.is_null() {
+                let mut len = 0;
+                while unsafe { *p.add(len) } != 0 {
+                    len += 1;
+                }
+                text = Some(String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, len) }));
+                unsafe {
+                    let _ = GlobalUnlock(g);
+                }
+            }
+            unsafe { ReleaseStgMedium(&mut m) };
+            if let Some(t) = text {
+                return Ok(OleContent::Text(t));
+            }
+        }
+        // For the log: what it does offer.
+        let mut names = Vec::new();
+        if let Ok(e) = unsafe { obj.EnumFormatEtc(DATADIR_GET.0 as u32) } {
+            let mut f = [FORMATETC::default(); 1];
+            while names.len() < 40 && unsafe { e.Next(&mut f, None) }.is_ok() && f[0].cfFormat != 0 {
+                let mut name = [0u16; 128];
+                let n = unsafe { windows::Win32::System::DataExchange::GetClipboardFormatNameW(f[0].cfFormat as u32, &mut name) };
+                names.push(if n > 0 { String::from_utf16_lossy(&name[..n as usize]) } else { f[0].cfFormat.to_string() });
+                f[0] = FORMATETC::default();
+            }
+        }
+        Ok(OleContent::Other(names.join(", ")))
+    });
+    r.unwrap_or_else(|| bail!("clipboard read thread failed"))
 }
