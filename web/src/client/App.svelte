@@ -62,7 +62,7 @@
 
 <div class="shell">
   <nav class="side">
-    <div class="brand"><span class="logo">N</span><span class="name">NyaRemoteControl<small>远程桌面</small></span></div>
+    <div class="brand"><span class="logo" aria-hidden="true"><svg viewBox="20 20 68 68" fill="#fff"><path d="M36 38 41 27 47 38zM61 38 67 27 72 38zM48 68h12l2 8H46zM42 76h24v3H42zM50 44v14l3.5-3.5L56 60l2.5-1-2.5-5.5H61z"/><path fill-rule="evenodd" d="M32 36h44a4 4 0 0 1 4 4v24a4 4 0 0 1-4 4H32a4 4 0 0 1-4-4V40a4 4 0 0 1 4-4zM34 40v22h40V40z"/></svg></span><span class="name">NyaRemoteControl<small>远程桌面</small></span></div>
     <div class="group">远程控制</div>
     {#each remote as n (n.id)}
       <button class="nav" class:on={page === n.id} onclick={() => ((page = n.id), n.id === 'settings' && (scope = null))}><Icon name={n.icon} /><span class="label">{n.label}</span></button>
