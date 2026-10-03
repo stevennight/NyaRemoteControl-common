@@ -102,7 +102,14 @@ impl FileChannel {
     }
 
     /// Send `header.size` bytes read from `src`; `progress(bytes)` per chunk.
-    pub async fn send_reader(&self, header: FileHeader, mut src: impl AsyncRead + Unpin, mut progress: impl FnMut(u64)) -> Result<()> {
+    /// Gives up (ABORT) at the next chunk once `cancelled()`.
+    pub async fn send_reader(
+        &self,
+        header: FileHeader,
+        mut src: impl AsyncRead + Unpin,
+        mut progress: impl FnMut(u64),
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> Result<()> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let name = if header.path.is_empty() { header.name.clone() } else { header.path.clone() };
         let size = header.size;
@@ -111,6 +118,10 @@ impl FileChannel {
         let mut buf = vec![0u8; CHUNK];
         let mut left = size;
         while left > 0 {
+            if cancelled() {
+                let _ = self.frame(ABORT, id, "已取消".as_bytes()).await;
+                bail!("已取消");
+            }
             let want = left.min(CHUNK as u64) as usize;
             let n = match src.read(&mut buf[..want]).await {
                 Ok(0) => {
@@ -135,7 +146,14 @@ impl FileChannel {
     }
 
     /// Send a file from disk (opened with `open` if given).
-    pub async fn send_file(&self, header: FileHeader, path: &Path, open: Option<&Opener>, progress: impl FnMut(u64)) -> Result<()> {
+    pub async fn send_file(
+        &self,
+        header: FileHeader,
+        path: &Path,
+        open: Option<&Opener>,
+        progress: impl FnMut(u64),
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> Result<()> {
         let file = match open {
             Some(open) => {
                 let (open, p) = (open.clone(), path.to_owned());
@@ -144,12 +162,12 @@ impl FileChannel {
             None => tokio::fs::File::open(path).await,
         }
         .with_context(|| format!("打开 {}", path.display()))?;
-        self.send_reader(header, file, progress).await
+        self.send_reader(header, file, progress, cancelled).await
     }
 
     /// Send bytes from memory (a clipboard image).
     pub async fn send_bytes(&self, header: FileHeader, data: &[u8]) -> Result<()> {
-        self.send_reader(header, data, |_| {}).await
+        self.send_reader(header, data, |_| {}, &|| false).await
     }
 }
 
@@ -498,8 +516,35 @@ mod tests {
         let (n, r) = host_got.recv().await.unwrap();
         assert_eq!((n.as_str(), r.unwrap_err().contains("磁盘错误")), ("cut", true));
 
+        // Cancelled part way: the receiver hears it (ABORT), not a short file.
+        let sent = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let s2 = sent.clone();
+        let cancel = move || s2.load(std::sync::atomic::Ordering::SeqCst) >= CHUNK as u64;
+        let data = vec![1u8; 4 * CHUNK];
+        let r = client
+            .send_reader(header("cancelled", data.len() as u64), &data[..], |n| {
+                sent.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+            }, &cancel)
+            .await;
+        assert!(r.unwrap_err().to_string().contains("已取消"));
+        let (n, r) = host_got.recv().await.unwrap();
+        assert_eq!((n.as_str(), r.unwrap_err().contains("已取消")), ("cancelled", true));
+
         client.close().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!host.is_alive());
+    }
+
+    /// A receiver whose transfer is cancelled stops reading at once.
+    #[tokio::test]
+    async fn cancelled_reads_fail() {
+        let cancels = crate::files::Cancels::default();
+        let mut src: &[u8] = b"0123456789";
+        let mut r = crate::files::Cancellable::new(&mut src, cancels.flag(5));
+        let mut buf = [0u8; 4];
+        assert_eq!(r.read(&mut buf).await.unwrap(), 4);
+        cancels.cancel(5);
+        assert!(cancels.is_cancelled(5) && !cancels.is_cancelled(6));
+        assert_eq!(r.read(&mut buf).await.unwrap_err().kind(), io::ErrorKind::Interrupted);
     }
 }

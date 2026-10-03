@@ -209,7 +209,14 @@ impl Incoming {
             return None;
         }
         match r {
-            Err(msg) => e.result = Some(Err(msg)),
+            Err(msg) => {
+                e.result = Some(Err(msg));
+                // What arrived of a failed (or cancelled) paste is of no use.
+                let root = e.root.clone();
+                std::thread::spawn(move || {
+                    let _ = std::fs::remove_dir_all(root);
+                });
+            }
             Ok(()) => {
                 e.received += 1;
                 if e.received < e.expected {
@@ -224,6 +231,11 @@ impl Incoming {
     /// The other side could not send offer `id`.
     pub fn fail(&self, id: u64, msg: String) -> Option<Result<Vec<PathBuf>, String>> {
         self.file_done(id, Err(msg))
+    }
+
+    /// Offer `id` is being fetched (requested, not finished).
+    pub fn in_progress(&self, id: u64) -> bool {
+        self.0.lock().unwrap().get(&id).is_some_and(|e| e.requested && e.result.is_none())
     }
 
     /// Everything still waiting fails (the connection ended).

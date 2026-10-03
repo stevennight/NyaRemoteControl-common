@@ -191,7 +191,60 @@ pub async fn send_file(conn: &Connection, header: FileHeader, path: &Path, progr
 }
 
 /// [`send_file`], opening the file with `open` if given.
-pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, open: Option<&Opener>, mut progress: impl FnMut(u64)) -> Result<()> {
+pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, open: Option<&Opener>, progress: impl FnMut(u64)) -> Result<()> {
+    send_quic(conn, header, path, open, progress, &|| false).await
+}
+
+/// Transfers cancelled on either side, by transfer id. Senders stop at the
+/// next chunk; receivers' reads fail ([`Cancellable`]).
+#[derive(Default)]
+pub struct Cancels(std::sync::Mutex<std::collections::HashMap<u64, std::sync::Arc<std::sync::atomic::AtomicBool>>>);
+
+impl Cancels {
+    /// The flag of transfer `id` (created unset).
+    pub fn flag(&self, id: u64) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.0.lock().unwrap().entry(id).or_default().clone()
+    }
+
+    pub fn cancel(&self, id: u64) {
+        self.flag(id).store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self, id: u64) -> bool {
+        self.0.lock().unwrap().get(&id).is_some_and(|f| f.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
+/// A file being received, failing once its transfer is cancelled.
+pub struct Cancellable<'a, R> {
+    inner: &'a mut R,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<'a, R> Cancellable<'a, R> {
+    pub fn new(inner: &'a mut R, cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self { inner, cancelled }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for Cancellable<'_, R> {
+    fn poll_read(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        if self.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return std::task::Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "已取消")));
+        }
+        std::pin::Pin::new(&mut *self.inner).poll_read(cx, buf)
+    }
+}
+
+/// A FILE stream on QUIC; stops (resets the stream) once `cancelled()`.
+async fn send_quic(
+    conn: &Connection,
+    header: FileHeader,
+    path: &Path,
+    open: Option<&Opener>,
+    mut progress: impl FnMut(u64),
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<()> {
     let opened = match open {
         Some(open) => {
             let (open, p) = (open.clone(), path.to_owned());
@@ -209,6 +262,10 @@ pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, 
     let mut buf = vec![0u8; CHUNK];
     let mut left = header.size;
     while left > 0 {
+        if cancelled() {
+            let _ = s.reset(1u32.into());
+            bail!("已取消");
+        }
         let n = file.read(&mut buf[..(left.min(CHUNK as u64) as usize)]).await?;
         if n == 0 {
             bail!("{} 在发送过程中变小了", path.display());
@@ -227,11 +284,17 @@ pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, 
 pub struct FileLink {
     conn: Connection,
     tcp: std::sync::Arc<std::sync::Mutex<Option<crate::filechan::FileChannel>>>,
+    cancels: std::sync::Arc<Cancels>,
 }
 
 impl FileLink {
     pub fn new(conn: Connection) -> Self {
-        Self { conn, tcp: Default::default() }
+        Self { conn, tcp: Default::default(), cancels: Default::default() }
+    }
+
+    /// Cancelled transfers of this connection (both directions).
+    pub fn cancels(&self) -> &std::sync::Arc<Cancels> {
+        &self.cancels
     }
 
     /// Use (or stop using) a TCP file channel.
@@ -250,9 +313,11 @@ impl FileLink {
 
     /// Send one file (from disk, opened with `open` if given).
     pub async fn send_file(&self, header: FileHeader, path: &Path, open: Option<&Opener>, progress: impl FnMut(u64)) -> Result<()> {
+        let flag = self.cancels.flag(header.transfer_id);
+        let cancelled = move || flag.load(std::sync::atomic::Ordering::SeqCst);
         match self.tcp() {
-            Some(ch) => ch.send_file(header, path, open, progress).await,
-            None => send_file_with(&self.conn, header, path, open, progress).await,
+            Some(ch) => ch.send_file(header, path, open, progress, &cancelled).await,
+            None => send_quic(&self.conn, header, path, open, progress, &cancelled).await,
         }
     }
 
