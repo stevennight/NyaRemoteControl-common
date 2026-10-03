@@ -124,11 +124,9 @@ pub fn format_names() -> String {
         let n = unsafe { GetClipboardFormatNameW(f, &mut name) };
         out.push(if n > 0 { String::from_utf16_lossy(&name[..n as usize]) } else { f.to_string() });
     }
-    if out.is_empty() {
-        format!("none ({})", std::io::Error::last_os_error())
-    } else {
-        out.join(", ")
-    }
+    let err = std::io::Error::last_os_error();
+    let count = unsafe { windows::Win32::System::DataExchange::CountClipboardFormats() };
+    format!("{} of {count} listed ({err}): {}", out.len(), out.join(", "))
 }
 
 fn shell_idlist_format() -> u32 {
@@ -311,18 +309,6 @@ pub fn set_dib(dib: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Only the OLE marker on the Win32 clipboard: the copying program (Explorer)
-/// put its data object there with OleSetClipboard, and this process sees
-/// none of its formats. Seen from the host's helper (SYSTEM) for every
-/// Explorer copy: "DataObject" and nothing else.
-pub fn only_ole_object() -> bool {
-    use windows::Win32::System::DataExchange::{CountClipboardFormats, IsClipboardFormatAvailable, RegisterClipboardFormatW};
-    unsafe {
-        let data_object = RegisterClipboardFormatW(windows::core::w!("DataObject"));
-        IsClipboardFormatAvailable(data_object).is_ok() && CountClipboardFormats() <= 2
-    }
-}
-
 /// Run `f` on a short-lived OLE (single-threaded apartment) thread.
 fn with_ole<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     std::thread::Builder::new()
@@ -347,8 +333,10 @@ fn ole_get(obj: &windows::Win32::System::Com::IDataObject, cf: u32) -> Option<wi
     (m.tymed == TYMED_HGLOBAL.0 as u32).then_some(m)
 }
 
-/// What the copying program's data object holds, read through OLE (when the
-/// Win32 clipboard shows only its marker, see [`only_ole_object`]).
+/// What the copying program's data object holds, read through OLE. For a
+/// process that sees only the OLE marker ("DataObject") on the Win32
+/// clipboard — the host's helper (SYSTEM) after every Explorer copy, though
+/// CountClipboardFormats still counts them all.
 pub enum OleContent {
     Files(Vec<std::path::PathBuf>),
     Text(String),
