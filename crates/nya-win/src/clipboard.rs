@@ -79,6 +79,16 @@ pub fn set_text(text: &str) -> Result<()> {
 const CF_DIB: u32 = 8;
 const CF_HDROP: u32 = 15;
 
+/// Process id of the clipboard's owner (who copied last), if any.
+pub fn owner_process() -> Option<u32> {
+    use windows::Win32::System::DataExchange::GetClipboardOwner;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+    let owner = unsafe { GetClipboardOwner() }.ok().filter(|h| !h.is_invalid())?;
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(owner, Some(&mut pid)) };
+    (pid != 0).then_some(pid)
+}
+
 pub fn has_files() -> bool {
     unsafe { windows::Win32::System::DataExchange::IsClipboardFormatAvailable(CF_HDROP).is_ok() }
 }
