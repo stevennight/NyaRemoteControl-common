@@ -177,9 +177,25 @@ pub fn prune_cache(root: &Path) {
     }
 }
 
+/// Opens the files to send another way than as this process (the host
+/// service reads them as the logged-on user).
+pub type Opener = std::sync::Arc<dyn Fn(&Path) -> std::io::Result<std::fs::File> + Send + Sync>;
+
 /// Send one file (from disk) on a new uni stream. `progress(bytes)` is called per chunk.
-pub async fn send_file(conn: &Connection, header: FileHeader, path: &Path, mut progress: impl FnMut(u64)) -> Result<()> {
-    let mut file = tokio::fs::File::open(path).await.with_context(|| format!("打开 {}", path.display()))?;
+pub async fn send_file(conn: &Connection, header: FileHeader, path: &Path, progress: impl FnMut(u64)) -> Result<()> {
+    send_file_with(conn, header, path, None, progress).await
+}
+
+/// [`send_file`], opening the file with `open` if given.
+pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, open: Option<&Opener>, mut progress: impl FnMut(u64)) -> Result<()> {
+    let opened = match open {
+        Some(open) => {
+            let (open, p) = (open.clone(), path.to_owned());
+            tokio::task::spawn_blocking(move || open(&p)).await?.map(tokio::fs::File::from_std)
+        }
+        None => tokio::fs::File::open(path).await,
+    };
+    let mut file = opened.with_context(|| format!("打开 {}", path.display()))?;
     let mut s = conn.open_uni().await?;
     s.set_priority(-1)?; // below video, input and cursor
     let mut prelude = Vec::new();

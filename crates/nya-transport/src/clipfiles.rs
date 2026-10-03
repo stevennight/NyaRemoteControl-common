@@ -29,11 +29,20 @@ impl Outgoing {
     /// Register copied `paths`; `None` if nothing can be offered. Without
     /// `folders` (older peers) only top-level files are offered.
     pub fn offer(&mut self, paths: &[PathBuf], folders: bool) -> Option<pb::FileOffer> {
-        let items: Vec<Item> = if folders {
+        self.offer_items(Self::expand(paths, folders))
+    }
+
+    /// What [`Outgoing::offer`] offers of `paths` (reads the disk).
+    pub fn expand(paths: &[PathBuf], folders: bool) -> Vec<Item> {
+        if folders {
             files::expand(paths)
         } else {
             files::expand(paths).into_iter().filter(|i| !i.is_dir && !i.rel.contains('/')).collect()
-        };
+        }
+    }
+
+    /// Register items from [`Outgoing::expand`]; `None` if there are none.
+    pub fn offer_items(&mut self, items: Vec<Item>) -> Option<pb::FileOffer> {
         if items.is_empty() {
             return None;
         }
@@ -61,7 +70,19 @@ impl Outgoing {
 
 /// Send the files of an offer (folders are implied by the paths).
 /// `progress(name, bytes)` is called per chunk.
-pub async fn send_items(conn: &Connection, id: u64, items: &[Item], purpose: pb::FilePurpose, mut progress: impl FnMut(&str, u64)) -> Result<()> {
+pub async fn send_items(conn: &Connection, id: u64, items: &[Item], purpose: pb::FilePurpose, progress: impl FnMut(&str, u64)) -> Result<()> {
+    send_items_with(conn, id, items, purpose, None, progress).await
+}
+
+/// [`send_items`], opening the files with `open` if given.
+pub async fn send_items_with(
+    conn: &Connection,
+    id: u64,
+    items: &[Item],
+    purpose: pb::FilePurpose,
+    open: Option<&files::Opener>,
+    mut progress: impl FnMut(&str, u64),
+) -> Result<()> {
     let list: Vec<&Item> = items.iter().filter(|i| !i.is_dir).collect();
     let count = list.len() as u32;
     for (i, it) in list.iter().enumerate() {
@@ -75,7 +96,7 @@ pub async fn send_items(conn: &Connection, id: u64, items: &[Item], purpose: pb:
             count,
             path: it.rel.clone(),
         };
-        files::send_file(conn, h, &it.abs, |n| progress(&name, n)).await?;
+        files::send_file_with(conn, h, &it.abs, open, |n| progress(&name, n)).await?;
     }
     Ok(())
 }

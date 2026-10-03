@@ -1,9 +1,18 @@
 //! Files on the clipboard that are not here yet ("copy on one computer, paste
-//! on the other"). An OLE data object advertises CF_HDROP; only when an
-//! application actually asks for the files (Explorer's Ctrl+V, a drop target,
-//! GetClipboardData) does it call the provider, which fetches them over the
-//! network into a local folder and returns their paths. Nothing is transferred
+//! on the other"). An OLE data object advertises them as virtual files
+//! (`FileGroupDescriptorW` + `FileContents`, as Outlook attachments or zip
+//! folders do): the list costs nothing to read; only when an application asks
+//! for a file's contents (Explorer pasting) does it call the provider, which
+//! fetches them over the network into a local folder. Nothing is transferred
 //! for a copy that is never pasted.
+//!
+//! Not CF_HDROP: programs that read every clipboard change (the cloud
+//! desktop's clipboard redirector, clipboard managers) asked for it at once,
+//! started the whole transfer and held the clipboard open meanwhile, so that
+//! real pastes failed ("clipboard busy"); Windows also gives up on a CF_HDROP
+//! that takes more than 30 s. Contents are asked for through COM by index,
+//! which such readers don't do. CF_HDROP is used only when the list cannot be
+//! described (paths of 260 characters or more).
 //!
 //! OLE needs a single-threaded apartment with a message loop: [`VirtualClipboard`]
 //! runs its own thread for that. Explorer calls the data object from its own
@@ -19,18 +28,93 @@ use windows::core::{implement, Result as WinResult, HRESULT};
 use windows::Win32::Foundation::{BOOL, E_NOTIMPL, HGLOBAL, S_OK};
 use windows::Win32::System::Com::{
     IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, DATADIR_GET, DVASPECT_CONTENT, FORMATETC,
-    STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+    STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL, TYMED_ISTREAM,
 };
 use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-use windows::Win32::System::Ole::{OleInitialize, OleIsCurrentClipboard, OleSetClipboard, OleUninitialize};
-use windows::Win32::UI::Shell::{SHCreateStdEnumFmtEtc, DROPFILES};
+use windows::Win32::System::Ole::{OleInitialize, OleSetClipboard, OleUninitialize};
+use windows::Win32::UI::Shell::{
+    SHCreateStdEnumFmtEtc, SHCreateStreamOnFileEx, DROPFILES, FD_ATTRIBUTES, FD_FILESIZE, FD_PROGRESSUI, FD_UNICODE,
+    FILEDESCRIPTORW, FILEGROUPDESCRIPTORW,
+};
 use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, QS_ALLINPUT};
 
 const CF_HDROP: u16 = 15;
 const DV_E_FORMATETC: HRESULT = HRESULT(0x8004_0064_u32 as i32);
+const DV_E_LINDEX: HRESULT = HRESULT(0x8004_0068_u32 as i32);
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+const STGM_READ: u32 = 0;
+const STGM_SHARE_DENY_WRITE: u32 = 0x20;
+/// `cFileName` of FILEDESCRIPTORW holds this many characters, NUL included.
+const MAX_DESCRIBED_PATH: usize = 260;
 const OLE_E_ADVISENOTSUPPORTED: HRESULT = HRESULT(0x8004_0003_u32 as i32);
 const DROPEFFECT_COPY: u32 = 1;
+
+/// One offered file or folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VirtualFile {
+    /// Relative path, '/' separated ("photos/2026/a.jpg").
+    pub path: String,
+    pub size: u64,
+    pub dir: bool,
+}
+
+/// The list as FileGroupDescriptorW wants it: safe relative paths, every
+/// folder before what is in it, no duplicates. `None` if it can't be
+/// described (empty, or a path too long for a descriptor).
+fn describe(files: &[VirtualFile]) -> Option<Vec<VirtualFile>> {
+    let mut out: Vec<VirtualFile> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for f in files {
+        let parts: Vec<&str> = f.path.split(['/', '\\']).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect();
+        for depth in 1..=parts.len() {
+            let last = depth == parts.len();
+            let path = parts[..depth].join("/");
+            if path.encode_utf16().count() >= MAX_DESCRIBED_PATH {
+                return None;
+            }
+            if seen.insert(path.to_lowercase()) {
+                let dir = !last || f.dir;
+                out.push(VirtualFile { path, size: if dir { 0 } else { f.size }, dir });
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// FILEGROUPDESCRIPTORW for `entries` (from [`describe`]).
+fn group_descriptor(entries: &[VirtualFile]) -> anyhow::Result<HGLOBAL> {
+    let header = std::mem::offset_of!(FILEGROUPDESCRIPTORW, fgd);
+    let size = header + entries.len() * std::mem::size_of::<FILEDESCRIPTORW>();
+    unsafe {
+        let g = GlobalAlloc(GMEM_MOVEABLE, size)?;
+        let p = GlobalLock(g) as *mut u8;
+        if p.is_null() {
+            anyhow::bail!("GlobalLock failed");
+        }
+        std::ptr::write_unaligned(p as *mut u32, entries.len() as u32);
+        let list = p.add(header) as *mut FILEDESCRIPTORW;
+        for (i, e) in entries.iter().enumerate() {
+            // FILEDESCRIPTORW is packed: the name is filled in on the side.
+            let mut name = [0u16; MAX_DESCRIBED_PATH];
+            for (j, c) in e.path.replace('/', "\\").encode_utf16().take(MAX_DESCRIBED_PATH - 1).enumerate() {
+                name[j] = c;
+            }
+            let d = FILEDESCRIPTORW {
+                cFileName: name,
+                dwFlags: (FD_ATTRIBUTES.0 | FD_FILESIZE.0 | FD_PROGRESSUI.0 | FD_UNICODE.0) as u32,
+                dwFileAttributes: if e.dir { FILE_ATTRIBUTE_DIRECTORY } else { FILE_ATTRIBUTE_NORMAL },
+                nFileSizeHigh: (e.size >> 32) as u32,
+                nFileSizeLow: e.size as u32,
+                ..Default::default()
+            };
+            std::ptr::write_unaligned(list.add(i), d);
+        }
+        let _ = GlobalUnlock(g);
+        Ok(g)
+    }
+}
 
 /// Fetches the offered files; blocks until they are local. Runs on a worker
 /// thread (the clipboard thread keeps serving other requests meanwhile). A
@@ -74,8 +158,24 @@ fn hglobal_u32(v: u32) -> anyhow::Result<HGLOBAL> {
     }
 }
 
-fn preferred_drop_effect() -> u16 {
-    unsafe { RegisterClipboardFormatW(windows::core::w!("Preferred DropEffect")) as u16 }
+/// Clipboard formats registered by name.
+#[derive(Clone, Copy)]
+struct Formats {
+    drop_effect: u16,
+    descriptor: u16,
+    contents: u16,
+}
+
+impl Formats {
+    fn get() -> Self {
+        unsafe {
+            Self {
+                drop_effect: RegisterClipboardFormatW(windows::core::w!("Preferred DropEffect")) as u16,
+                descriptor: RegisterClipboardFormatW(windows::core::w!("FileGroupDescriptorW")) as u16,
+                contents: RegisterClipboardFormatW(windows::core::w!("FileContents")) as u16,
+            }
+        }
+    }
 }
 
 /// Where an offer's files are.
@@ -93,7 +193,9 @@ enum Files {
 struct DataObject {
     provider: Provider,
     files: Mutex<Files>,
-    drop_effect: u16,
+    /// Described as virtual files (else CF_HDROP).
+    entries: Option<Vec<VirtualFile>>,
+    cf: Formats,
 }
 
 /// Dispatch window messages (and with them COM calls into this apartment) for up to `ms`.
@@ -109,13 +211,49 @@ fn pump(ms: u32) {
 }
 
 impl DataObject {
-    fn formats(&self) -> [FORMATETC; 2] {
-        let f = |cf| FORMATETC { cfFormat: cf, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
-        [f(CF_HDROP), f(self.drop_effect)]
+    fn new(files: &[VirtualFile], provider: Provider, cf: Formats) -> Self {
+        Self { provider, files: Mutex::new(Files::Idle), entries: describe(files), cf }
+    }
+
+    fn formats(&self) -> Vec<FORMATETC> {
+        let f = |cf, tymed: i32| FORMATETC { cfFormat: cf, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: tymed as u32 };
+        match &self.entries {
+            Some(_) => vec![
+                f(self.cf.descriptor, TYMED_HGLOBAL.0),
+                // One per file, by index; listed for the first (as is usual).
+                FORMATETC { lindex: 0, ..f(self.cf.contents, TYMED_ISTREAM.0) },
+                f(self.cf.drop_effect, TYMED_HGLOBAL.0),
+            ],
+            None => vec![f(CF_HDROP, TYMED_HGLOBAL.0), f(self.cf.drop_effect, TYMED_HGLOBAL.0)],
+        }
     }
 
     fn supports(&self, f: &FORMATETC) -> bool {
-        (f.cfFormat == CF_HDROP || f.cfFormat == self.drop_effect) && f.tymed & TYMED_HGLOBAL.0 as u32 != 0
+        self.formats().iter().any(|o| o.cfFormat == f.cfFormat && o.tymed & f.tymed != 0)
+    }
+
+    /// Stream on the fetched copy of entry `index` (fetching the files first).
+    fn contents(&self, index: i32) -> WinResult<STGMEDIUM> {
+        let entry = usize::try_from(index).ok().and_then(|i| self.entries.as_ref()?.get(i)).filter(|e| !e.dir);
+        // Index -1 is what a program reading every clipboard change gets
+        // (GetClipboardData): no transfer for that.
+        let Some(entry) = entry else { return Err(DV_E_LINDEX.into()) };
+        let paths = self.paths().map_err(|e| {
+            tracing::warn!("clipboard files: {e}");
+            windows::core::Error::new(windows::Win32::Foundation::E_FAIL, e)
+        })?;
+        // The provider returns the top-level items of the folder it fetched into.
+        let root = paths.first().and_then(|p| p.parent()).ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+        let local = entry.path.split('/').fold(root.to_path_buf(), |p, c| p.join(c));
+        let stream = unsafe {
+            SHCreateStreamOnFileEx(&windows::core::HSTRING::from(local.as_os_str()), STGM_READ | STGM_SHARE_DENY_WRITE, 0, false, None)
+        }
+        .inspect_err(|e| tracing::warn!("clipboard files: open {}: {e}", local.display()))?;
+        Ok(STGMEDIUM {
+            tymed: TYMED_ISTREAM.0 as u32,
+            u: STGMEDIUM_0 { pstm: std::mem::ManuallyDrop::new(Some(stream)) },
+            pUnkForRelease: std::mem::ManuallyDrop::new(None),
+        })
     }
 
     /// The local paths, fetching them the first time. Waits without blocking
@@ -169,10 +307,16 @@ fn medium(g: HGLOBAL) -> STGMEDIUM {
 impl IDataObject_Impl for DataObject_Impl {
     fn GetData(&self, pformatetcin: *const FORMATETC) -> WinResult<STGMEDIUM> {
         let f = unsafe { pformatetcin.as_ref() }.ok_or(windows::core::Error::from(DV_E_FORMATETC))?;
+        tracing::debug!("clipboard files: GetData cf={} lindex={} tymed={:#x}", f.cfFormat, f.lindex, f.tymed);
         if !self.supports(f) {
             return Err(DV_E_FORMATETC.into());
         }
-        let g = if f.cfFormat == CF_HDROP {
+        if f.cfFormat == self.cf.contents {
+            return self.contents(f.lindex);
+        }
+        let g = if f.cfFormat == self.cf.descriptor {
+            group_descriptor(self.entries.as_deref().unwrap_or_default())
+        } else if f.cfFormat == CF_HDROP {
             let paths = self.paths().map_err(|e| {
                 tracing::warn!("clipboard files: {e}");
                 windows::core::Error::new(windows::Win32::Foundation::E_FAIL, e)
@@ -189,6 +333,9 @@ impl IDataObject_Impl for DataObject_Impl {
     }
 
     fn QueryGetData(&self, pformatetc: *const FORMATETC) -> HRESULT {
+        if let Some(f) = unsafe { pformatetc.as_ref() } {
+            tracing::trace!("clipboard files: QueryGetData cf={} lindex={} tymed={:#x}", f.cfFormat, f.lindex, f.tymed);
+        }
         match unsafe { pformatetc.as_ref() } {
             Some(f) if self.supports(f) => S_OK,
             _ => DV_E_FORMATETC,
@@ -228,7 +375,7 @@ impl IDataObject_Impl for DataObject_Impl {
 }
 
 enum Cmd {
-    Offer(Provider),
+    Offer(Vec<VirtualFile>, Provider),
     Clear,
     Stop,
 }
@@ -258,9 +405,9 @@ impl VirtualClipboard {
         Self { tx, thread, ours, tid }
     }
 
-    /// Put files on the clipboard that `provider` fetches when they are pasted.
-    pub fn offer(&self, provider: Provider) {
-        let _ = self.tx.send(Cmd::Offer(provider));
+    /// Put `files` on the clipboard; `provider` fetches them when they are pasted.
+    pub fn offer(&self, files: Vec<VirtualFile>, provider: Provider) {
+        let _ = self.tx.send(Cmd::Offer(files, provider));
     }
 
     /// Remove our offer if it is still on the clipboard (the other side went away).
@@ -301,9 +448,21 @@ fn run(rx: Receiver<Cmd>, ours: Arc<std::sync::atomic::AtomicBool>) {
         tracing::warn!("clipboard files unavailable: OleInitialize: {e}");
         return;
     }
-    let drop_effect = preferred_drop_effect();
+    let cf = Formats::get();
     let mut current: Option<IDataObject> = None;
-    let still_ours = |c: &Option<IDataObject>| c.as_ref().is_some_and(|o| unsafe { OleIsCurrentClipboard(o) }.is_ok());
+    // OLE's clipboard window belongs to this thread. (Not OleIsCurrentClipboard:
+    // the bindings turn its S_FALSE into success, so a later copy by the user
+    // was taken for ours and emptied by Clear / Stop.)
+    let me = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+    let still_ours = |c: &Option<IDataObject>| {
+        use windows::Win32::System::DataExchange::GetClipboardOwner;
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        c.is_some()
+            && match unsafe { GetClipboardOwner() } {
+                Ok(owner) if !owner.is_invalid() => (unsafe { GetWindowThreadProcessId(owner, None) }) == me,
+                _ => false,
+            }
+    };
     loop {
         // Pump messages (OLE marshals calls into this thread), wake up for commands.
         pump(100);
@@ -315,8 +474,12 @@ fn run(rx: Receiver<Cmd>, ours: Arc<std::sync::atomic::AtomicBool>) {
                 Err(TryRecvError::Disconnected) => Cmd::Stop,
             };
             match cmd {
-                Cmd::Offer(provider) => {
-                    let obj: IDataObject = DataObject { provider, files: Mutex::new(Files::Idle), drop_effect }.into();
+                Cmd::Offer(files, provider) => {
+                    let obj = DataObject::new(&files, provider, cf);
+                    if obj.entries.is_none() {
+                        tracing::info!("clipboard files: {} item(s) offered as CF_HDROP (paths too long to describe)", files.len());
+                    }
+                    let obj: IDataObject = obj.into();
                     // Our clipboard watchers must see this before the change becomes visible.
                     ours.store(true, std::sync::atomic::Ordering::SeqCst);
                     let mut set = false;
@@ -427,6 +590,113 @@ mod tests {
         }
     }
 
+    #[test]
+    fn descriptors_list_folders_first() {
+        let f = |path: &str, size, dir| VirtualFile { path: path.into(), size, dir };
+        let d = describe(&[f("a/b/c.txt", 3, false), f("a/b", 0, true), f("x.bin", 9, false), f("../evil/./y", 1, false), f("A/B/d.txt", 4, false)]).unwrap();
+        let got: Vec<(&str, u64, bool)> = d.iter().map(|e| (e.path.as_str(), e.size, e.dir)).collect();
+        assert_eq!(
+            got,
+            [("a", 0, true), ("a/b", 0, true), ("a/b/c.txt", 3, false), ("x.bin", 9, false), ("evil", 0, true), ("evil/y", 1, false), ("A/B/d.txt", 4, false)]
+        );
+        assert!(describe(&[]).is_none());
+        assert!(describe(&[f(&"x".repeat(300), 1, false)]).is_none(), "too long for a descriptor: CF_HDROP");
+
+        let g = group_descriptor(&d[..3]).unwrap();
+        unsafe {
+            let p = GlobalLock(g) as *const u8;
+            assert_eq!(std::ptr::read_unaligned(p as *const u32), 3);
+            let list = p.add(std::mem::offset_of!(FILEGROUPDESCRIPTORW, fgd)) as *const FILEDESCRIPTORW;
+            let third = std::ptr::read_unaligned(list.add(2));
+            let chars = third.cFileName;
+            let name = String::from_utf16_lossy(&chars[..9]);
+            assert_eq!(name, "a\\b\\c.txt");
+            assert_eq!((third.nFileSizeLow, third.dwFileAttributes), (3, FILE_ATTRIBUTE_NORMAL));
+            let first = std::ptr::read_unaligned(list);
+            let attrs = first.dwFileAttributes;
+            assert_eq!(attrs, FILE_ATTRIBUTE_DIRECTORY);
+            let _ = GlobalUnlock(g);
+            let _ = windows::Win32::Foundation::GlobalFree(g);
+        }
+    }
+
+    /// Virtual files, asked for from another apartment (as Explorer does):
+    /// the list and a whole-clipboard read (index -1) transfer nothing; the
+    /// first file's contents fetch once, then every file streams from the
+    /// fetched copy.
+    #[test]
+    fn contents_fetch_only_when_a_file_is_read() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use windows::core::Interface;
+        use windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream;
+        use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
+        use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
+
+        let root = std::env::temp_dir().join(format!("nya-virtual-files-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        std::fs::write(root.join("dir").join("a.txt"), b"hello").unwrap();
+        std::fs::write(root.join("b.txt"), b"xyz").unwrap();
+        let files = vec![
+            VirtualFile { path: "dir/a.txt".into(), size: 5, dir: false },
+            VirtualFile { path: "b.txt".into(), size: 3, dir: false },
+        ];
+        let calls = Arc::new(AtomicU32::new(0));
+        let (c, r) = (calls.clone(), root.clone());
+        let provider: Provider = Arc::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![r.join("dir"), r.join("b.txt")])
+        });
+        let cf = Formats::get();
+        let (tx, rx) = std::sync::mpsc::channel::<usize>();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = stop.clone();
+        let owner = std::thread::spawn(move || unsafe {
+            OleInitialize(None).unwrap();
+            let obj: IDataObject = DataObject::new(&files, provider, cf).into();
+            tx.send(CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj).unwrap().into_raw() as usize).unwrap();
+            while !s.load(Ordering::SeqCst) {
+                pump(20);
+            }
+            drop(obj);
+            OleUninitialize();
+        });
+        let stream = rx.recv().unwrap();
+        let read_all = |m: &STGMEDIUM| -> Vec<u8> {
+            let st: &IStream = unsafe { m.u.pstm.as_ref() }.unwrap();
+            unsafe { st.Seek(0, STREAM_SEEK_SET, None).unwrap() };
+            let mut buf = vec![0u8; 64];
+            let mut n = 0u32;
+            let _ = unsafe { st.Read(buf.as_mut_ptr().cast(), 64, Some(&mut n)) };
+            buf.truncate(n as usize);
+            buf
+        };
+        unsafe {
+            OleInitialize(None).unwrap();
+            let obj: IDataObject = CoGetInterfaceAndReleaseStream(&IStream::from_raw(stream as *mut _)).unwrap();
+            let fmt = |cf: u16, lindex: i32, tymed: i32| FORMATETC { cfFormat: cf, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex, tymed: tymed as u32 };
+            assert!(obj.QueryGetData(&fmt(CF_HDROP, -1, TYMED_HGLOBAL.0)).is_err(), "no CF_HDROP for described files");
+            let list = obj.GetData(&fmt(cf.descriptor, -1, TYMED_HGLOBAL.0)).unwrap();
+            let p = GlobalLock(list.u.hGlobal) as *const u32;
+            assert_eq!(*p, 3, "dir, dir/a.txt, b.txt");
+            let _ = GlobalUnlock(list.u.hGlobal);
+            assert!(obj.GetData(&fmt(cf.contents, -1, TYMED_ISTREAM.0)).is_err());
+            assert!(obj.GetData(&fmt(cf.contents, 0, TYMED_ISTREAM.0)).is_err(), "a folder has no contents");
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing fetched yet");
+            let a = obj.GetData(&fmt(cf.contents, 1, TYMED_ISTREAM.0 | TYMED_HGLOBAL.0)).unwrap();
+            assert_eq!(a.tymed, TYMED_ISTREAM.0 as u32);
+            assert_eq!(read_all(&a), b"hello");
+            let b = obj.GetData(&fmt(cf.contents, 2, TYMED_ISTREAM.0)).unwrap();
+            assert_eq!(read_all(&b), b"xyz");
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "one fetch for all files");
+            drop((a, b, list));
+            drop(obj);
+            OleUninitialize();
+        }
+        stop.store(true, Ordering::SeqCst);
+        owner.join().unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The data object lives in one apartment (as on the clipboard thread),
     /// callers in others (as Explorer and clipboard viewers do through COM).
     /// While one paste waits for a slow fetch, another caller is answered at
@@ -458,7 +728,8 @@ mod tests {
         let s = stop.clone();
         let owner = std::thread::spawn(move || unsafe {
             OleInitialize(None).unwrap();
-            let obj: IDataObject = DataObject { provider, files: Mutex::new(Files::Idle), drop_effect: preferred_drop_effect() }.into();
+            // No list: the CF_HDROP way.
+            let obj: IDataObject = DataObject::new(&[], provider, Formats::get()).into();
             let a = CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj).unwrap();
             let b = CoMarshalInterThreadInterfaceInStream(&IDataObject::IID, &obj).unwrap();
             tx.send((a.into_raw() as usize, b.into_raw() as usize)).unwrap();
@@ -511,7 +782,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let expected = vec![dir.join("nya-virtual-a.txt")];
         let e2 = expected.clone();
-        vc.offer(Arc::new(move || Ok(e2.clone())));
+        vc.offer(Vec::new(), Arc::new(move || Ok(e2.clone())));
 
         std::thread::sleep(Duration::from_millis(400));
         assert!(vc.is_ours());
