@@ -8,7 +8,7 @@ use nya_proto::frame::stream_type;
 use nya_proto::framing::{encode_varint, expect_msg};
 use nya_proto::pb::FileHeader;
 use quinn::{Connection, RecvStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 const CHUNK: usize = 256 * 1024;
 /// File streams share the link with the video (same priority, served in
@@ -124,7 +124,7 @@ pub fn top_level(root: &Path, rels: impl IntoIterator<Item = String>) -> Vec<Pat
 
 /// Receive the payload into `root` at the header's relative path (a paste in
 /// progress; the folder is fresh, existing files are replaced).
-pub async fn receive_to_tree(r: &mut RecvStream, h: &FileHeader, root: &Path, mut progress: impl FnMut(u64)) -> Result<PathBuf> {
+pub async fn receive_to_tree<R: AsyncRead + Unpin>(r: &mut R, h: &FileHeader, root: &Path, mut progress: impl FnMut(u64)) -> Result<PathBuf> {
     let rel = if h.path.is_empty() { h.name.as_str() } else { h.path.as_str() };
     let final_path = root.join(safe_rel_path(rel));
     if let Some(dir) = final_path.parent() {
@@ -139,7 +139,7 @@ pub async fn receive_to_tree(r: &mut RecvStream, h: &FileHeader, root: &Path, mu
         let mut buf = vec![0u8; CHUNK];
         let mut left = h.size;
         while left > 0 {
-            let n = r.read(&mut buf[..(left.min(CHUNK as u64) as usize)]).await?.unwrap_or(0);
+            let n = AsyncReadExt::read(r, &mut buf[..(left.min(CHUNK as u64) as usize)]).await?;
             if n == 0 {
                 bail!("传输中断（{} 还差 {left} 字节）", rel);
             }
@@ -221,6 +221,50 @@ pub async fn send_file_with(conn: &Connection, header: FileHeader, path: &Path, 
     Ok(())
 }
 
+/// Where files go: the TCP file channel when there is one (FEATURE_TCP_FILES),
+/// else FILE streams on the QUIC connection.
+#[derive(Clone)]
+pub struct FileLink {
+    conn: Connection,
+    tcp: std::sync::Arc<std::sync::Mutex<Option<crate::filechan::FileChannel>>>,
+}
+
+impl FileLink {
+    pub fn new(conn: Connection) -> Self {
+        Self { conn, tcp: Default::default() }
+    }
+
+    /// Use (or stop using) a TCP file channel.
+    pub fn set_tcp(&self, ch: Option<crate::filechan::FileChannel>) {
+        *self.tcp.lock().unwrap() = ch;
+    }
+
+    /// The working TCP file channel, if any.
+    pub fn tcp(&self) -> Option<crate::filechan::FileChannel> {
+        self.tcp.lock().unwrap().clone().filter(|c| c.is_alive())
+    }
+
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// Send one file (from disk, opened with `open` if given).
+    pub async fn send_file(&self, header: FileHeader, path: &Path, open: Option<&Opener>, progress: impl FnMut(u64)) -> Result<()> {
+        match self.tcp() {
+            Some(ch) => ch.send_file(header, path, open, progress).await,
+            None => send_file_with(&self.conn, header, path, open, progress).await,
+        }
+    }
+
+    /// Send bytes from memory (a clipboard image).
+    pub async fn send_bytes(&self, header: FileHeader, data: &[u8]) -> Result<()> {
+        match self.tcp() {
+            Some(ch) => ch.send_bytes(header, data).await,
+            None => send_bytes(&self.conn, header, data).await,
+        }
+    }
+}
+
 /// Send in-memory bytes (clipboard image).
 pub async fn send_bytes(conn: &Connection, header: FileHeader, data: &[u8]) -> Result<()> {
     let mut s = conn.open_uni().await?;
@@ -241,7 +285,7 @@ pub async fn read_header(r: &mut RecvStream) -> Result<FileHeader> {
 
 /// Receive the payload into `dir`, under a unique, sanitized name. Writes to
 /// a `.part` file first so half-received files are never mistaken for complete ones.
-pub async fn receive_to_dir(r: &mut RecvStream, h: &FileHeader, dir: &Path, mut progress: impl FnMut(u64)) -> Result<PathBuf> {
+pub async fn receive_to_dir<R: AsyncRead + Unpin>(r: &mut R, h: &FileHeader, dir: &Path, mut progress: impl FnMut(u64)) -> Result<PathBuf> {
     tokio::fs::create_dir_all(dir).await.with_context(|| format!("创建 {}", dir.display()))?;
     let name = sanitize_name(&h.name);
     let final_path = unique_path(dir, &name);
@@ -254,7 +298,7 @@ pub async fn receive_to_dir(r: &mut RecvStream, h: &FileHeader, dir: &Path, mut 
         let mut buf = vec![0u8; CHUNK];
         let mut left = h.size;
         while left > 0 {
-            let n = r.read(&mut buf[..(left.min(CHUNK as u64) as usize)]).await?.unwrap_or(0);
+            let n = AsyncReadExt::read(r, &mut buf[..(left.min(CHUNK as u64) as usize)]).await?;
             if n == 0 {
                 bail!("传输中断（{} 还差 {left} 字节）", h.name);
             }
@@ -280,12 +324,12 @@ pub async fn receive_to_dir(r: &mut RecvStream, h: &FileHeader, dir: &Path, mut 
 }
 
 /// Receive a small payload into memory.
-pub async fn receive_to_vec(r: &mut RecvStream, h: &FileHeader, limit: u64) -> Result<Vec<u8>> {
+pub async fn receive_to_vec<R: AsyncRead + Unpin>(r: &mut R, h: &FileHeader, limit: u64) -> Result<Vec<u8>> {
     if h.size > limit {
         bail!("数据过大（{} 字节）", h.size);
     }
     let mut v = vec![0u8; h.size as usize];
-    r.read_exact(&mut v).await?;
+    AsyncReadExt::read_exact(r, &mut v).await?;
     Ok(v)
 }
 

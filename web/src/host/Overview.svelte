@@ -83,10 +83,10 @@
         <b>{svcText[snap.svc]}</b>
         <span>
           {#if snap.status}
-            {snap.status.listen ? `监听 UDP ${snap.status.listen}` : '没有在监听'} ·
+            {snap.status.listen ? `监听 UDP/TCP ${snap.status.listen}` : '没有在监听'} ·
             {snap.status.host?.running ? `采集进程运行中（会话 ${snap.status.host.console_session}）` : '采集进程未运行'} · 版本 {snap.status.server_version}
           {:else}
-            端口 UDP {snap.config.port}
+            端口 UDP/TCP {snap.config.port}
           {/if}
         </span>
       </div>

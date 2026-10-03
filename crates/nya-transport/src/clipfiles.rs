@@ -71,12 +71,12 @@ impl Outgoing {
 /// Send the files of an offer (folders are implied by the paths).
 /// `progress(name, bytes)` is called per chunk.
 pub async fn send_items(conn: &Connection, id: u64, items: &[Item], purpose: pb::FilePurpose, progress: impl FnMut(&str, u64)) -> Result<()> {
-    send_items_with(conn, id, items, purpose, None, progress).await
+    send_items_with(&files::FileLink::new(conn.clone()), id, items, purpose, None, progress).await
 }
 
 /// [`send_items`], opening the files with `open` if given.
 pub async fn send_items_with(
-    conn: &Connection,
+    link: &files::FileLink,
     id: u64,
     items: &[Item],
     purpose: pb::FilePurpose,
@@ -96,7 +96,7 @@ pub async fn send_items_with(
             count,
             path: it.rel.clone(),
         };
-        files::send_file_with(conn, h, &it.abs, open, |n| progress(&name, n)).await?;
+        link.send_file(h, &it.abs, open, |n| progress(&name, n)).await?;
     }
     Ok(())
 }

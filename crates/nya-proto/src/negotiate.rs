@@ -57,6 +57,7 @@ pub fn all_features() -> BTreeSet<u32> {
         Feature::Print,
         Feature::Hdr,
         Feature::TextInput,
+        Feature::TcpFiles,
     ]
     .into_iter()
     .map(|f| f as u32)

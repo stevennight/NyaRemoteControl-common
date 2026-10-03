@@ -10,6 +10,7 @@
 
 pub mod clipfiles;
 pub mod endpoint;
+pub mod filechan;
 pub mod files;
 pub mod folders;
 pub mod identity;

@@ -43,7 +43,7 @@
   <div class="card group">
     <h3>网络</h3>
     <div class="field">
-      <div class="text"><b>端口（UDP）</b><span>改端口会断开当前连接，并自动更新防火墙规则</span></div>
+      <div class="text"><b>端口（UDP 和 TCP）</b><span>画面等走 UDP，文件走 TCP。改端口会断开当前连接，并自动更新防火墙规则</span></div>
       <input class="input sm num" type="number" min="1024" max="65535" bind:value={c.port} aria-label="端口" />
     </div>
     <div class="field">
