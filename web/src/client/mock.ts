@@ -53,6 +53,9 @@ export const mock: Mock = async (cmd, args, emit) => {
       }
       return null;
     }
+    case 'clipboard_link':
+      return null;
+    case 'invite_ok':
     case 'pair':
     case 'cancel_connect':
     case 'pin_changed':

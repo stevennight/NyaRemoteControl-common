@@ -51,6 +51,10 @@
       <input class="input sm addr" bind:value={c.bind} spellcheck="false" aria-label="监听地址" />
     </div>
     <div class="field">
+      <div class="text"><b>对外地址</b><span>通过端口转发、frp 或域名从别处访问本机时填写（如 frp.example.com:7000，多个用逗号分隔）。只用于配对二维码和链接</span></div>
+      <input class="input sm addr" bind:value={c.public_address} spellcheck="false" placeholder="可不填" aria-label="对外地址" />
+    </div>
+    <div class="field">
       <div class="text"><b>显示名称</b><span>客户端看到的名字，留空 = 计算机名（{snap.computer}）</span></div>
       <input class="input sm addr" bind:value={c.name} placeholder={snap.computer} aria-label="显示名称" />
     </div>

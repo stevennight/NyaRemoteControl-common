@@ -12,7 +12,12 @@ export type Config = {
   log_level: string;
   /** Look for new versions (installing is always the user's choice). */
   check_updates: boolean;
+  /** Addresses for pairing links besides the local IPs (port forwarding, frp). */
+  public_address: string;
 };
+
+/** The pairing link (administrators only): QR code for phones, link for computers. */
+export type Invite = { link: string; qr: string | null; addresses: string[] };
 
 export type Event = { unix: number; kind: string; text: string };
 
@@ -38,6 +43,7 @@ export type Snapshot = {
   status: Status | null;
   code: string;
   fingerprint: string;
+  invite: Invite | null;
   config: Config;
   encoders: string[];
   clients: { fingerprint: string; name: string; paired_at: string }[];

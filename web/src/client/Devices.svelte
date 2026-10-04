@@ -51,7 +51,7 @@
 
 <form class="quick card" onsubmit={quick}>
   <Icon name="link" />
-  <input bind:value={address} placeholder="输入地址直接连接，例如 100.64.0.2 或 host:47100" aria-label="地址" spellcheck="false" />
+  <input bind:value={address} placeholder="输入地址直接连接（如 100.64.0.2、host:47100），或粘贴配对链接" aria-label="地址" spellcheck="false" />
   <button class="btn primary" type="submit" disabled={!address.trim()}>连接</button>
 </form>
 
@@ -91,7 +91,7 @@
   <button class="add" onclick={onadd}>
     <Icon name="plus" size={26} />
     <span>添加设备</span>
-    {#if !cs.hosts.length}<small>输入被控端的地址（Tailscale / EasyTier 等组网后的 IP）</small>{/if}
+    {#if !cs.hosts.length}<small>输入被控端的地址（Tailscale / EasyTier 等组网后的 IP），或粘贴被控端的配对链接</small>{/if}
   </button>
 </div>
 

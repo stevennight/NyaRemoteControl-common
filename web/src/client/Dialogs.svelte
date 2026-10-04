@@ -4,7 +4,7 @@
   import Modal from '../lib/Modal.svelte';
   import { call, errorText } from '../lib/ipc';
   import { toast } from '../lib/notify.svelte';
-  import type { ClientState, Local, Phase } from './types';
+  import { isPairLink, type ClientState, type Local, type Phase } from './types';
 
   let {
     phase,
@@ -16,6 +16,8 @@
   let address = $state('');
   let name = $state('');
   let error = $state('');
+  let fromClipboard = $state(false);
+  const link = $derived(isPairLink(address));
 
   $effect(() => {
     // Fresh fields whenever a dialog opens.
@@ -26,6 +28,15 @@
     if (local?.kind === 'add') {
       address = '';
       name = '';
+      // A pairing link just copied (from the host's 本机 page, or a chat): offer it.
+      call<string | null>('clipboard_link')
+        .then((l) => {
+          if (l && !address) {
+            address = l;
+            fromClipboard = true;
+          }
+        })
+        .catch(() => {});
     } else if (local?.kind === 'rename') {
       name = local.host.custom_name ? local.host.name : '';
     }
@@ -104,6 +115,16 @@
       <button class="btn primary" onclick={() => call('pin_changed', { retry: true })}>重新验证</button>
     {/snippet}
   </Modal>
+{:else if phase.phase === 'invite'}
+  <Modal title="通过配对链接连接" width={460} onclose={() => call('invite_ok', { ok: false })}>
+    <p>要连接到 <b>{phase.label}</b> 并自动配对吗？</p>
+    <div class="addrs">{#each phase.addresses as a (a)}<span class="chip mono">{a}</span>{/each}</div>
+    <p class="hint">只打开你自己或信任的人发来的链接：连接后，你在远程窗口里的键盘输入、剪贴板和拖进去的文件会发送到那台电脑。</p>
+    {#snippet footer()}
+      <button class="btn ghost" onclick={() => call('invite_ok', { ok: false })}>取消</button>
+      <button class="btn primary" onclick={() => call('invite_ok', { ok: true })}>连接</button>
+    {/snippet}
+  </Modal>
 {:else if phase.phase === 'verify'}
   <Modal title="核对证书指纹" width={460}>
     <p>被控端已经认识本机，所以没有用配对码验证它的身份。请核对指纹：</p>
@@ -118,16 +139,19 @@
 
 {#if local?.kind === 'add'}
   <Modal title="添加设备" onclose={() => (local = null)}>
-    <p>被控端的地址（Tailscale / EasyTier 等组网后的 IP，可带端口）。第一次连接时输入被控端显示的配对码。</p>
-    <label class="lbl" for="addr">地址</label>
-    <input id="addr" class="input" bind:value={address} placeholder="100.64.0.2 或 host:47100" spellcheck="false" use:autofocus />
+    <p>被控端的地址（Tailscale / EasyTier 等组网后的 IP，可带端口），第一次连接时输入被控端显示的配对码；或者粘贴被控端“本机”页的配对链接，连接时自动配对。</p>
+    <label class="lbl" for="addr">地址或配对链接</label>
+    <input id="addr" class="input" bind:value={address} oninput={() => (fromClipboard = false)} placeholder="100.64.0.2、host:47100 或 nyaremote://…" spellcheck="false" use:autofocus />
+    {#if link}
+      <p class="hint ok">{fromClipboard ? '已从剪贴板填入配对链接。' : '这是配对链接：'}点“连接”会同时尝试链接里的地址，并自动配对。</p>
+    {/if}
     <div style="height: 12px"></div>
     <label class="lbl" for="nm">名称（可选）</label>
     <input id="nm" class="input" bind:value={name} placeholder="不填则使用被控端自己设置的名称" />
     {#if error}<div class="err">{error}</div>{/if}
     {#snippet footer()}
       <button class="btn ghost" onclick={() => (local = null)}>取消</button>
-      <button class="btn" onclick={() => add(false)} disabled={!address.trim()}>仅保存</button>
+      {#if !link}<button class="btn" onclick={() => add(false)} disabled={!address.trim()}>仅保存</button>{/if}
       <button class="btn primary" onclick={() => add(true)} disabled={!address.trim()}>连接</button>
     {/snippet}
   </Modal>
@@ -164,4 +188,6 @@
   .fp { font-size: 18px; font-weight: 600; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); margin-bottom: 12px; word-break: break-all; }
   .err { color: var(--danger); font-size: 13px; margin-top: 10px; }
   .hint { color: var(--text-3); font-size: 12.5px; margin: 10px 0 0; }
+  .hint.ok { color: var(--ok); }
+  .addrs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 </style>

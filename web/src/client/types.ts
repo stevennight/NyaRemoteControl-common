@@ -80,7 +80,12 @@ export type Phase =
   | { phase: 'connecting'; label: string }
   | { phase: 'pairing'; label: string }
   | { phase: 'pin_changed'; label: string }
-  | { phase: 'verify'; label: string; fingerprint: string };
+  | { phase: 'verify'; label: string; fingerprint: string }
+  /** A pairing link was opened (clicked): connect? */
+  | { phase: 'invite'; label: string; addresses: string[] };
+
+/** A pairing link (`nyaremote://pair?…`) somewhere in the text? */
+export const isPairLink = (s: string) => /nyaremote:\/\//i.test(s);
 
 /** Host management dialog that is open. */
 export type Local = { kind: 'add' } | { kind: 'rename'; host: Host } | { kind: 'delete'; host: Host } | null;

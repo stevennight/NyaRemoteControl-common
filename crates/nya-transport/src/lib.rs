@@ -4,6 +4,7 @@
 //! * [`tls`] – rustls configs: server/client certificates are checked by
 //!   fingerprint at the application level instead of by a CA
 //! * [`pairing`] – pairing code and HMAC transcript proofs
+//! * [`invite`] – pairing links (QR codes): addresses, fingerprint and code
 //! * [`endpoint`] – quinn endpoints with tuned transport settings
 //! * [`videodgram`] – video frames as datagrams with Reed-Solomon FEC
 //! * [`folders`] – client folders served to the host's mounted drive
@@ -14,6 +15,7 @@ pub mod filechan;
 pub mod files;
 pub mod folders;
 pub mod identity;
+pub mod invite;
 pub mod pairing;
 pub mod tcptunnel;
 pub mod tls;

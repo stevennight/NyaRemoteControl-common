@@ -28,7 +28,13 @@ const snap: Snapshot = {
   },
   code: 'K7QM-2XRA-9PLE-4TCD-HW8N-3JFV',
   fingerprint: '3205 4309 b911 ee42 2458 2fe7 9fc1 1c44',
-  config: { port: 47100, bind: '::', name: '', encoder: 'auto', office_bitrate_kbps: 0, game_bitrate_kbps: 0, max_fps: 144, audio: true, log_level: 'info', check_updates: true },
+  invite: {
+    link: 'nyaremote://pair?v=1&n=DESKTOP-C5E71I8&a=frp.example.com:7000,192.168.1.20:47100,100.64.0.2:47100&c=K7QM2XRA9PLE4TCDHW8N3JFV',
+    // A stand-in pattern (the real one comes from the app).
+    qr: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21" shape-rendering="crispEdges"><rect width="21" height="21" fill="#fff"/>${Array.from({ length: 441 }, (_, i) => ((i * 7919) % 13 < 6 ? `<rect x="${i % 21}" y="${Math.floor(i / 21)}" width="1" height="1"/>` : '')).join('')}</svg>`,
+    addresses: ['frp.example.com:7000', '192.168.1.20:47100', '100.64.0.2:47100'],
+  },
+  config: { port: 47100, bind: '::', name: '', encoder: 'auto', office_bitrate_kbps: 0, game_bitrate_kbps: 0, max_fps: 144, audio: true, log_level: 'info', check_updates: true, public_address: 'frp.example.com:7000' },
   encoders: ['auto', 'nvenc', 'qsv', 'amf', 'software'],
   clients: [
     { fingerprint: 'a81c2f0d9e6b4471c0de55aa', name: 'DESKTOP-DEV', paired_at: '2026-09-27 17:05' },

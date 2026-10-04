@@ -7,6 +7,7 @@
 
   let { snap, onelevate }: { snap: Snapshot; onelevate: () => void } = $props();
   let confirmReset = $state(false);
+  let showInvite = $state(false);
 
   const svcText = { running: '运行中', stopped: '已停止', pending: '正在切换…', not_installed: '未安装', unknown: '未知' };
   const kindChip: Record<string, [string, string]> = {
@@ -106,8 +107,11 @@
       <div class="pair">
         <span class="code selectable">{snap.code || '—'}</span>
         <button class="btn icon" aria-label="复制配对码" onclick={() => copy(snap.code, '配对码')} disabled={!snap.code}><Icon name="copy" /></button>
+        {#if snap.invite}
+          <button class="btn" onclick={() => (showInvite = true)}><Icon name="qr" size={16} />扫码 / 链接配对</button>
+        {/if}
       </div>
-      <div class="hint">客户端第一次连接时输入；已配对的客户端之后不再需要。</div>
+      <div class="hint">客户端第一次连接时输入；也可以用手机版扫二维码，或把配对链接发给电脑版。已配对的客户端之后不再需要。</div>
     {:else}
       <div class="pair"><button class="btn" onclick={onelevate}><Icon name="shield" size={16} />以管理员身份查看</button></div>
       <div class="hint">配对码可以让别人控制这台电脑，只有管理员能查看。</div>
@@ -167,6 +171,31 @@
 </div>
 {/if}
 
+{#if showInvite && snap.invite}
+  {@const inv = snap.invite}
+  <Modal title="扫码 / 链接配对" width={520} onclose={() => (showInvite = false)}>
+    <div class="invite">
+      {#if inv.qr}
+        <div class="qr" aria-label="配对二维码">{@html inv.qr}</div>
+      {/if}
+      <div class="how">
+        <p><b>手机</b>：在 NyaRemoteControl 手机版点“扫码添加”，扫左边的二维码。</p>
+        <p><b>电脑</b>：复制配对链接发给那台电脑（微信、QQ 等），在电脑版的“添加设备”里粘贴，或者直接点开链接。</p>
+        <p class="warn">二维码和链接里含有配对码，等同于配对码本身：不要发到群里或公开的地方。</p>
+      </div>
+    </div>
+    <div class="addrs">
+      <span class="muted small">链接里的地址（客户端会同时尝试）：</span>
+      {#each inv.addresses as a (a)}<span class="chip mono">{a}</span>{/each}
+    </div>
+    <div class="muted small">通过端口转发或 frp 从外网访问？在“被控设置 → 网络 → 对外地址”里填上，就会加进链接。</div>
+    {#snippet footer()}
+      <button class="btn ghost" onclick={() => (showInvite = false)}>关闭</button>
+      <button class="btn primary" onclick={() => copy(inv.link, '配对链接')}><Icon name="link" size={16} />复制配对链接</button>
+    {/snippet}
+  </Modal>
+{/if}
+
 {#if confirmReset}
   <Modal title="重新生成配对码" onclose={() => (confirmReset = false)}>
     <p>旧配对码将失效。已经配对过的客户端不受影响。</p>
@@ -198,6 +227,13 @@
   .code { font: 600 15.5px/1.2 var(--mono); letter-spacing: 0.5px; white-space: nowrap; padding: 8px 12px; background: var(--surface-2); border-radius: 8px; border: 1px solid var(--line); }
   .hint { color: var(--text-3); font-size: 12.5px; margin-top: 8px; }
   .fp { font-size: 13.5px; word-break: break-all; }
+  .invite { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 12px; }
+  .qr { flex: none; width: 200px; height: 200px; padding: 8px; background: #fff; border-radius: 10px; border: 1px solid var(--line); }
+  .qr :global(svg) { display: block; width: 100%; height: 100%; }
+  .how p { font-size: 13px; margin: 0 0 10px; }
+  .how .warn { color: var(--warn); }
+  .addrs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  @media (max-width: 560px) { .invite { flex-direction: column; align-items: center; } }
   .conn { display: flex; align-items: center; gap: 14px; }
   .avatar { width: 40px; height: 40px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); display: grid; place-items: center; font-weight: 700; flex: none; }
   .conn .grow { flex: 1; min-width: 0; }
