@@ -125,6 +125,14 @@ impl Duplicator {
         }
     }
 
+    /// Use only presented images, also for the first one. For a duplication
+    /// re-created after access was lost while the caller still has the
+    /// desktop's picture: its unpresented first image is no news, and on some
+    /// HDR displays that keep losing access it comes up black.
+    pub fn skip_unpresented_first(&mut self) {
+        self.first = false;
+    }
+
     /// Wait up to `timeout_ms` for a new frame or pointer update.
     pub fn acquire(&mut self, timeout_ms: u32) -> Result<Option<Frame>, DupError> {
         self.release();
