@@ -191,7 +191,9 @@ const SHAPE_COLOR: u32 = 2;
 const SHAPE_MASKED_COLOR: u32 = 4;
 
 /// Convert a DXGI pointer shape to straight RGBA. XOR ("invert screen")
-/// pixels cannot be expressed in RGBA and are drawn black.
+/// pixels cannot be expressed in RGBA: they are drawn black with a white
+/// halo, so inverting cursors (the text I-beam) stay visible on dark
+/// backgrounds too.
 pub fn convert_pointer_shape(info: &DXGI_OUTDUPL_POINTER_SHAPE_INFO, buf: &[u8]) -> Option<CursorShape> {
     let pitch = info.Pitch as usize;
     let (w, h) = match info.Type {
@@ -202,6 +204,7 @@ pub fn convert_pointer_shape(info: &DXGI_OUTDUPL_POINTER_SHAPE_INFO, buf: &[u8])
         return None;
     }
     let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let mut invert = vec![false; (w * h) as usize];
     for y in 0..h as usize {
         for x in 0..w as usize {
             let o = (y * w as usize + x) * 4;
@@ -214,7 +217,10 @@ pub fn convert_pointer_shape(info: &DXGI_OUTDUPL_POINTER_SHAPE_INFO, buf: &[u8])
                         (false, false) => [0, 0, 0, 255],
                         (false, true) => [255, 255, 255, 255],
                         (true, false) => [0, 0, 0, 0],
-                        (true, true) => [0, 0, 0, 255],
+                        (true, true) => {
+                            invert[y * w as usize + x] = true;
+                            [0, 0, 0, 255]
+                        }
                     }
                 }
                 SHAPE_COLOR => {
@@ -228,6 +234,7 @@ pub fn convert_pointer_shape(info: &DXGI_OUTDUPL_POINTER_SHAPE_INFO, buf: &[u8])
                     } else if s[0] == 0 && s[1] == 0 && s[2] == 0 {
                         [0, 0, 0, 0]
                     } else {
+                        invert[y * w as usize + x] = true;
                         [0, 0, 0, 255]
                     }
                 }
@@ -236,6 +243,7 @@ pub fn convert_pointer_shape(info: &DXGI_OUTDUPL_POINTER_SHAPE_INFO, buf: &[u8])
             rgba[o..o + 4].copy_from_slice(&px);
         }
     }
+    halo(&mut rgba, &invert, w as usize, h as usize);
     Some(CursorShape {
         width: w,
         height: h,
@@ -243,6 +251,26 @@ pub fn convert_pointer_shape(info: &DXGI_OUTDUPL_POINTER_SHAPE_INFO, buf: &[u8])
         hot_y: info.HotSpot.y,
         rgba,
     })
+}
+
+/// Turn transparent pixels next to an inverting pixel white.
+fn halo(rgba: &mut [u8], invert: &[bool], w: usize, h: usize) {
+    if !invert.contains(&true) {
+        return;
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let o = (y * w + x) * 4;
+            if rgba[o + 3] != 0 {
+                continue;
+            }
+            let near = (y.saturating_sub(1)..=(y + 1).min(h - 1))
+                .any(|ny| (x.saturating_sub(1)..=(x + 1).min(w - 1)).any(|nx| invert[ny * w + nx]));
+            if near {
+                rgba[o..o + 4].copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -264,9 +292,31 @@ mod tests {
         let s = convert_pointer_shape(&info, &buf).unwrap();
         assert_eq!((s.width, s.height, s.hot_x), (8, 1, 1));
         assert_eq!(&s.rgba[0..4], &[0, 0, 0, 255]); // and=1 xor=1 -> black
-        assert_eq!(&s.rgba[4..8], &[0, 0, 0, 0]); // and=1 xor=0 -> transparent
+        assert_eq!(&s.rgba[4..8], &[255, 255, 255, 255]); // and=1 xor=0 next to an invert pixel -> halo
         assert_eq!(&s.rgba[8..12], &[255, 255, 255, 255]); // and=0 xor=1 -> white
         assert_eq!(&s.rgba[12..16], &[0, 0, 0, 255]); // and=0 xor=0 -> black
+    }
+
+    #[test]
+    fn inverting_beam_gets_a_halo() {
+        // 3x3, only the middle pixel inverts the screen.
+        let info = DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+            Type: SHAPE_MONOCHROME,
+            Width: 3,
+            Height: 6,
+            Pitch: 1,
+            HotSpot: POINT::default(),
+        };
+        let buf = [0xE0, 0xE0, 0xE0, 0x00, 0x40, 0x00];
+        let s = convert_pointer_shape(&info, &buf).unwrap();
+        for i in 0..9 {
+            let px = &s.rgba[i * 4..i * 4 + 4];
+            if i == 4 {
+                assert_eq!(px, &[0, 0, 0, 255]);
+            } else {
+                assert_eq!(px, &[255, 255, 255, 255], "pixel {i}");
+            }
+        }
     }
 
     #[test]

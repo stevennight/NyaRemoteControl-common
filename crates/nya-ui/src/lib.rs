@@ -25,6 +25,9 @@ pub struct FrameOutput {
     pub pixels_per_point: f32,
     /// When egui wants the next frame (`Duration::ZERO` = as soon as possible).
     pub repaint_after: Duration,
+    /// egui set the window cursor (and made it visible) during this frame.
+    /// A window showing a cursor of its own (the remote one) sets it again.
+    pub cursor_set: bool,
 }
 
 /// egui context + winit integration + D3D11 painter for one window.
@@ -32,6 +35,10 @@ pub struct Gui {
     pub ctx: egui::Context,
     state: egui_winit::State,
     painter: Painter,
+    /// Mirror of egui-winit's cursor bookkeeping: it sets the cursor when its
+    /// icon changes or the pointer comes back into the window.
+    cursor_icon: Option<egui::CursorIcon>,
+    pointer_in: bool,
 }
 
 impl Gui {
@@ -47,7 +54,7 @@ impl Gui {
             None,
             Some(8192),
         );
-        Ok(Self { ctx, state, painter: Painter::new(dev)? })
+        Ok(Self { ctx, state, painter: Painter::new(dev)?, cursor_icon: None, pointer_in: false })
     }
 
     /// The painter is tied to a device; call after the device was recreated.
@@ -60,12 +67,25 @@ impl Gui {
     }
 
     pub fn on_event(&mut self, window: &Window, event: &WindowEvent) -> EventResponse {
+        match event {
+            WindowEvent::CursorMoved { .. } => self.pointer_in = true,
+            WindowEvent::CursorLeft { .. } => self.pointer_in = false,
+            // Touch moves and removes egui's pointer; assume the cursor gets set again.
+            WindowEvent::Touch(_) => {
+                self.pointer_in = true;
+                self.cursor_icon = None;
+            }
+            _ => {}
+        }
         self.state.on_window_event(window, event)
     }
 
     pub fn run(&mut self, window: &Window, ui: impl FnMut(&egui::Context)) -> FrameOutput {
         let input = self.state.take_egui_input(window);
         let out = self.ctx.run(input, ui);
+        let icon = out.platform_output.cursor_icon;
+        let cursor_set = self.pointer_in && self.cursor_icon != Some(icon);
+        self.cursor_icon = self.pointer_in.then_some(icon);
         self.state.handle_platform_output(window, out.platform_output);
         let repaint_after = out
             .viewport_output
@@ -77,6 +97,7 @@ impl Gui {
             textures: out.textures_delta,
             pixels_per_point: out.pixels_per_point,
             repaint_after,
+            cursor_set,
         }
     }
 
