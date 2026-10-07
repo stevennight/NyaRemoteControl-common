@@ -43,6 +43,8 @@ pub struct CursorShape {
     pub height: u32,
     pub hot_x: i32,
     pub hot_y: i32,
+    /// DXGI pointer shape type (1 monochrome, 2 color, 4 masked color), for logs.
+    pub kind: u32,
     /// Straight-alpha RGBA.
     pub rgba: Vec<u8>,
 }
@@ -249,6 +251,7 @@ pub fn convert_pointer_shape(info: &DXGI_OUTDUPL_POINTER_SHAPE_INFO, buf: &[u8])
         height: h,
         hot_x: info.HotSpot.x,
         hot_y: info.HotSpot.y,
+        kind: info.Type,
         rgba,
     })
 }
