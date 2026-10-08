@@ -10,6 +10,7 @@ pub mod devnode;
 pub mod display_config;
 pub mod dpi;
 pub mod duplication;
+pub mod gdi;
 pub mod input;
 pub mod input_block;
 pub mod package;
