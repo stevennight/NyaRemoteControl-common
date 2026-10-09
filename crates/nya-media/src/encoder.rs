@@ -13,6 +13,13 @@
 //!
 //! HDR10 (`EncoderConfig::hdr`, HEVC Main10 on NVENC / QSV / AMF): P010
 //! input holding BT.2020 PQ, tagged as such in the bitstream.
+//!
+//! Rate control (see [`rc_limits`]). Game mode: CBR, a one-frame VBV. Office
+//! mode: VBR with an 8-frame VBV and a 2× peak, so the first frames after the
+//! picture was still (the VBV is empty then) may burst instead of dropping to
+//! mush; QP is kept within [`OFFICE_QP`]: the floor saves bits on easy content,
+//! the ceiling keeps motion readable. NVENC runs a quarter-resolution first
+//! pass on every frame so a sudden change gets the right QP at once.
 
 use std::ffi::CString;
 use std::os::raw::c_int;
@@ -104,10 +111,22 @@ pub struct EncoderConfig {
     pub height: u32,
     pub fps: u32,
     pub bitrate_kbps: u32,
-    /// Game mode: fastest preset, CBR, tight VBV. Office: better quality, room for bursts.
+    /// Game mode: fastest preset, CBR, tight VBV. Office: better quality, room for bursts
+    /// (see the module docs).
     pub game_mode: bool,
     /// HDR10: P010 input (BT.2020, PQ), Main10 profile.
     pub hdr: bool,
+}
+
+/// Office mode QP range (H.264 / HEVC scale).
+const OFFICE_QP: (i32, i32) = (18, 38);
+
+/// Peak rate and VBV size (bits) for a target `bitrate` (bit/s).
+fn rc_limits(game: bool, bitrate: i64, fps: i64) -> (i64, c_int) {
+    // Game: CBR, about one frame. Office: room for a burst of ~8 average
+    // frames at up to twice the rate (a whole-screen change after a still picture).
+    let (max_rate, frames_in_vbv) = if game { (bitrate, 1) } else { (bitrate * 2, 8) };
+    (max_rate, ((bitrate / fps.max(1)) * frames_in_vbv).min(i32::MAX as i64) as c_int)
 }
 
 pub struct EncodedPacket {
@@ -297,11 +316,10 @@ impl VideoEncoder {
             // Keyframes only on demand (client request / new stream).
             (*c).gop_size = if cfg.backend == Backend::Software { fps * 60 } else { i32::MAX / 2 };
             (*c).max_b_frames = 0;
+            let (max_rate, buffer) = rc_limits(cfg.game_mode, bitrate, fps as i64);
             (*c).bit_rate = bitrate;
-            (*c).rc_max_rate = if cfg.game_mode { bitrate } else { bitrate * 3 / 2 };
-            // VBV: ~1 frame in game mode, ~4 frames in office mode (sharper keyframes).
-            let frames_in_vbv = if cfg.game_mode { 1 } else { 4 };
-            (*c).rc_buffer_size = ((bitrate / fps as i64) * frames_in_vbv).min(i32::MAX as i64) as c_int;
+            (*c).rc_max_rate = max_rate;
+            (*c).rc_buffer_size = buffer;
             (*c).flags |= ff::AV_CODEC_FLAG_LOW_DELAY as c_int;
             (*c).color_range = ff::AVCOL_RANGE_MPEG;
             if cfg.hdr {
@@ -328,11 +346,20 @@ impl VideoEncoder {
 
         let mut opts = Dict::new();
         let game = cfg.game_mode;
+        // AV1 counts QP on a 0–255 scale; its encoders keep their defaults.
+        let qp_bounds = (!game && cfg.codec != VideoCodec::Av1).then_some(OFFICE_QP);
         match cfg.backend {
             Backend::Nvenc => {
                 opts.set("preset", if game { "p1" } else { "p4" });
                 opts.set("tune", if game { "ull" } else { "ll" });
                 opts.set("rc", if game { "cbr" } else { "vbr" });
+                // Size each frame from a quick quarter-resolution pass: no added
+                // latency, and the first frame of a sudden change is not mis-sized.
+                opts.set("multipass", "qres");
+                if let Some((min, max)) = qp_bounds {
+                    opts.set("qmin", &min.to_string());
+                    opts.set("qmax", &max.to_string());
+                }
                 opts.set("zerolatency", "1");
                 opts.set("delay", "0");
                 opts.set("forced-idr", "1");
@@ -351,6 +378,14 @@ impl VideoEncoder {
                 opts.set("forced_idr", "1");
                 if cfg.codec == VideoCodec::H264 {
                     opts.set("look_ahead", "0");
+                }
+                if let Some((min, max)) = qp_bounds {
+                    for k in ["min_qp_i", "min_qp_p"] {
+                        opts.set(k, &min.to_string());
+                    }
+                    for k in ["max_qp_i", "max_qp_p"] {
+                        opts.set(k, &max.to_string());
+                    }
                 }
                 if cfg.yuv444 {
                     opts.set("profile", "rext");
@@ -388,20 +423,21 @@ impl VideoEncoder {
         &self.cfg
     }
 
-    /// Change the target bitrate while encoding. NVENC and QSV reconfigure on the
-    /// next frame without a keyframe; returns false for encoders that can't.
+    /// Change the target bitrate while encoding; returns false for encoders
+    /// that can't. NVENC applies it on the next frame, which FFmpeg makes a
+    /// reset with an IDR frame: don't call this often.
     pub fn set_bitrate(&mut self, kbps: u32) -> bool {
         if !matches!(self.cfg.backend, Backend::Nvenc | Backend::Qsv) {
             return false;
         }
         let fps = self.cfg.fps.max(1) as i64;
         let bitrate = kbps.max(100) as i64 * 1000;
-        let frames_in_vbv = if self.cfg.game_mode { 1 } else { 4 };
+        let (max_rate, buffer) = rc_limits(self.cfg.game_mode, bitrate, fps);
         unsafe {
             let c = self.ctx;
             (*c).bit_rate = bitrate;
-            (*c).rc_max_rate = if self.cfg.game_mode { bitrate } else { bitrate * 3 / 2 };
-            (*c).rc_buffer_size = ((bitrate / fps) * frames_in_vbv).min(i32::MAX as i64) as c_int;
+            (*c).rc_max_rate = max_rate;
+            (*c).rc_buffer_size = buffer;
         }
         self.cfg.bitrate_kbps = kbps;
         true
